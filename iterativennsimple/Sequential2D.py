@@ -4,6 +4,9 @@ from iterativennsimple.MaskedLinear import MaskedLinear
 from iterativennsimple.SparseLinear import SparseLinear
 
 class Identity(torch.nn.Identity):
+    """
+    A torch.nn.Identity module that also has in_features and out_features attributes.
+    """
     def __init__(self, *args, in_features=None, out_features=None, **kwargs):
         super(Identity, self).__init__(*args, **kwargs)
         assert in_features is not None, "in_features must be specified"
@@ -12,7 +15,6 @@ class Identity(torch.nn.Identity):
         self.out_features = out_features
 
 class Sequential2D(torch.nn.Module):
-
     """
     A 2D version of the torch.nn.Sequential module.
 
@@ -123,8 +125,8 @@ class Sequential2D(torch.nn.Module):
                 elif block_type == 'None':
                     blocks_row.append(None)
                 elif block_type == 'Identity':
-                    blocks_row.append(Sequential2D_Identity(in_features=in_features_list[i],
-                                                            out_features=out_features_list[j]))
+                    blocks_row.append(Identity(in_features=in_features_list[i],
+                                               out_features=out_features_list[j]))
                 elif block_type == 'Linear':
                     blocks_row.append(torch.nn.Linear(in_features_list[i], out_features_list[j]))
                 elif block_type == 'MaskedLinear':

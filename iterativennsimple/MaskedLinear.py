@@ -1,4 +1,6 @@
 import math
+import time
+import logging
 from typing import Any
 
 import numpy as np
@@ -6,9 +8,7 @@ import torch
 
 from iterativennsimple.bmatrix import bmatrix
 
-import logging
 logger = logging.getLogger(__name__)
-import time
 
 class MaskedLinear(torch.nn.Module):
     """
