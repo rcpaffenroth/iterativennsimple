@@ -1,3 +1,7 @@
+# preprocessed data
+data/processed
+data/external
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
