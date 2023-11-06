@@ -15,10 +15,10 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "bash scripts/post-create.sh",
+	// "postCreateCommand": "bash scripts/post-create.sh",
 
 	// Use 'postStartCommand' to run commands after the container is started.
-	"postStartCommand": "code notebooks/1-rcp-generate-data.ipynb",
+	// "postStartCommand": "code notebooks/1-rcp-generate-data.ipynb",
 
 	// Configure tool-specific properties.
 	"customizations": {
