@@ -1,5 +1,9 @@
 # Notes for developers
 
+## Defaults
+See .devcontainer/devcontainer.json for the defaults.  This can 
+automatically install python packages, run scripts, install extensions, etc.
+
 ## How to use
 
 If you are using this in Codespaces you can just run the following commands in the terminal:
