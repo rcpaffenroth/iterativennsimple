@@ -1,3 +1,6 @@
+# tensorboard stuff
+runs/
+
 # preprocessed data
 data/processed
 data/external
