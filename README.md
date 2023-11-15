@@ -25,5 +25,5 @@ to get started.
 Don't forget to set your Python environment.  The one used here is
 
 ```
-.venv/bin/python
+. venv/bin/python
 ```
