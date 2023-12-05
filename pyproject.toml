@@ -9,29 +9,29 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.10"
 # For the computational code
-torch = {version = "^2.1.0+cpu", source = "pytorch"}
-torchvision = {version = "^0.16.0+cpu", source = "pytorch"}
-numpy = "1.25.*"
+#torch = {version = "^2.1.0+cpu", source = "pytorch"}
+#torchvision = {version = "^0.16.0+cpu", source = "pytorch"}
+#numpy = "1.25.*"
 # For data
-pandas = "2.1.*"
-pyarrow = "13.0.*"
+#pandas = "2.1.*"
+#pyarrow = "13.0.*"
 # For the notebooks and vscode
-matplotlib = "3.8.*"
-ipykernel = "6.26.*"
-ipympl = "0.9.*"
-jupyterlab = "4.0.*"
+#matplotlib = "3.8.*"
+#ipykernel = "6.26.*"
+#ipympl = "0.9.*"
+#jupyterlab = "4.0.*"
 
-[tool.poetry.group.dev]
-optional = true
+#[tool.poetry.group.dev]
+#optional = true
 
-[tool.poetry.group.dev.dependencies]
-pytest = "7.4.*"
-pylint = "3.0.*"
+#[tool.poetry.group.dev.dependencies]
+#pytest = "7.4.*"
+#pylint = "3.0.*"
 
-[[tool.poetry.source]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cpu"
-priority = "explicit"
+#[[tool.poetry.source]]
+#name = "pytorch"
+#url = "https://download.pytorch.org/whl/cpu"
+#priority = "explicit"
 
 [build-system]
 requires = ["poetry-core"]
