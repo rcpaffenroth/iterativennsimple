@@ -8,14 +8,14 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-For the computational code
-torch = {version = "2.1.1", source = "pytorch"}
-torchvision = {version = "0.16.1", source = "pytorch"}
+# For the computational code
+torch = {version = "2.1.0", source = "pytorch"}
+torchvision = {version = "0.16.0", source = "pytorch"}
 numpy = "1.25.*"
-For data
+# For data
 pandas = "2.1.*"
 pyarrow = "13.0.*"
-For the notebooks and vscode
+# For the notebooks and vscode
 matplotlib = "3.8.*"
 ipykernel = "6.26.*"
 ipympl = "0.9.*"
@@ -28,15 +28,6 @@ optional = true
 pytest = "7.4.*"
 pylint = "3.0.*"
 
-[[tool.poetry.source]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cu118"
-priority = "explicit"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
-
 [tool.poetry.group.sparse]
 optional = true
 
@@ -46,4 +37,14 @@ torch-sparse = {version = "*", source="torch-sparse"}
 
 [[tool.poetry.source]]
 name = "torch-sparse"
-url = "https://data.pyg.org/whl/torch-2.1.1+cu118.html"
+url = "https://data.pyg.org/whl/torch-2.1.0+cu118.html"
+priority = "explicit"
+
+[[tool.poetry.source]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu118"
+priority = "explicit"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
