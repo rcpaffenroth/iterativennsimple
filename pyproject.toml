@@ -20,6 +20,7 @@ matplotlib = "3.8.*"
 ipykernel = "6.26.*"
 ipympl = "0.9.*"
 jupyterlab = "4.0.*"
+jupytext = "1.16.*"
 
 [tool.poetry.group.dev]
 optional = true

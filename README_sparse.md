@@ -9,8 +9,7 @@ automatically install python packages, run scripts, install extensions, etc.
 If you are using this in Codespaces you can just run the following commands in the terminal:
 
 ```bash
-poetry shell
-poetry install --with dev
+poetry install --with dev,sparse
 ```
 
 ## pytorch and poetry
