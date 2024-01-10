@@ -1,25 +1,3 @@
-# ---
-# jupyter:
-#   jupytext:
-#     formats: ipynb,py:percent,md
-#     text_representation:
-#       extension: .py
-#       format_name: percent
-#       format_version: '1.3'
-#       jupytext_version: 1.16.0
-#   kernelspec:
-#     display_name: Python 3 (ipykernel)
-#     language: python
-#     name: python3
-# ---
-
-# %% [markdown]
-# # TODO
-
-# %% [markdown] id="f6828844-3a74-49bd-8348-ceae45948da7"
-# # Load data
-
-# %% id="a5713c2d-0108-4708-9f0d-021e183f6d1e"
 import torch
 import pandas as pd
 
@@ -41,14 +19,6 @@ torch.manual_seed(0)
 # Turn a pandas dataframe into a pytorch tensor
 def df_to_tensor(df):
     return torch.tensor(df.values, dtype=torch.float32)
-
-
-# %% id="9f5c3fcc-147d-4669-8ab2-3ddf16a88b4e"
-#name = 'regression_line'
-#name = 'pca_line'
-#name = 'circle'
-#name = 'regression_circle'
-#one_hot_y = False
 
 name = 'MNIST'
 one_hot_y = True
