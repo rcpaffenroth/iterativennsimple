@@ -11,26 +11,16 @@ import os
 def test_for_Neil():
     # This is based on notebooks/4-rcp-MLP.ipynb
 
-    # Neil, this code is a little unstable, mainly because of the way I'm doing the intialization of the weights.   
-    # I put this here just for pedagogical purposes.  Be sure to remove for real runs!
-    torch.manual_seed(0)
-    #torch.use_deterministic_algorithms(True)
-    print(os.getcwd())
-
     # Turn a pandas dataframe into a pytorch tensor
     def df_to_tensor(df):
         return torch.tensor(df.values, dtype=torch.float32)
 
-    one_hot_y = True
-
     # Read the start data
-    # z_start = pd.read_parquet('MNIST_small_start.parquet')
-    z_start = pd.read_parquet('../data/processed/MNIST_start.parquet')
+    z_start = pd.read_parquet('tests/MNIST_small_start.parquet')
     # Read the target data
-    # z_target = pd.read_parquet('MNIST_small_target.parquet')
-    z_target = pd.read_parquet('../data/processed/MNIST_target.parquet')
+    z_target = pd.read_parquet('tests/MNIST_small_target.parquet')
 
-    # ## Data preprocessing
+    # Data preprocessing
 
     z_start_tensor = df_to_tensor(z_start)
     z_target_tensor = df_to_tensor(z_target)
@@ -42,24 +32,16 @@ def test_for_Neil():
     z_target_tensor = z_target_tensor[:num_samples]
 
     mask = (z_start_tensor == z_target_tensor).all(axis=0)
-    mask.shape
     x_mask = mask
     y_mask = ~mask
-
-    print(x_mask.shape, y_mask.shape)
-
-    print(x_mask.sum(), y_mask.sum())
 
     input_size = int(x_mask.sum())
     h1_size = 20
     h2_size = 20
     output_size = int(y_mask.sum())
 
-    x_idx = torch.arange(0, input_size)
     h_idx = torch.arange(input_size, input_size+h1_size+h2_size)
     y_idx = torch.arange(input_size+h1_size+h2_size, input_size+h1_size+h2_size+output_size)
-
-    total_size = input_size + h1_size + h2_size + output_size
 
     iterations = 3
     sparsity = 'R=0.4'
@@ -126,7 +108,8 @@ def test_for_Neil():
     criterion = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(map.parameters(), lr=0.001)
 
-    max_epochs = 20
+    max_epochs = 50
+    last_loss = 10**9
     # Train the model
     for epoch in range(max_epochs):
         for batch_idx, (start, target) in enumerate(train_loader):
@@ -144,4 +127,8 @@ def test_for_Neil():
             optimizer.step()
         if epoch % 10 == 0:
             print(f'Epoch {epoch}, Batch {batch_idx}, Loss {loss.item()}')
+            assert loss.item() < last_loss
+            last_loss = loss.item()
 
+if __name__ == "__main__":
+    test_for_Neil()
