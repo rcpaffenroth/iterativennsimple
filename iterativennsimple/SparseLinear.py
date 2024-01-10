@@ -191,7 +191,7 @@ class SparseLinear(torch.nn.Module):
 
     @staticmethod
     def from_singleBlock(row_size, col_size, block_type, initialization_type, 
-                         optimized_implementation: bool = True, 
+                         optimized_implementation: bool = True,  transpose: bool = False,
                          bias: bool = True, device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a single block description.
@@ -230,7 +230,7 @@ class SparseLinear(torch.nn.Module):
         # block = SparseLinear._getBlock(initializer, block_type, col_size, row_size)
         block = SparseLinear._getBlock(initializer, block_type, row_size, col_size)
         A = SparseLinear(block, None, optimized_implementation=optimized_implementation, 
-                         bias=bias, device=device, dtype=dtype)
+                         transpose=transpose, bias=bias, device=device, dtype=dtype)
         return A
         
     @staticmethod
