@@ -115,7 +115,7 @@ class SparseLinear(torch.nn.Module):
         self.out_features = sparse_trainable.shape[0]
 
         if bias:
-            self.bias = torch.nn.parameter.Parameter(torch.empty(self.out_features, **factory_kwargs))
+            self.bias = torch.nn.parameter.Parameter(torch.zeros(self.out_features, **factory_kwargs), requires_grad=True)
         else:
             self.register_parameter('bias', None)
 
