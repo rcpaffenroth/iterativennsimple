@@ -1,6 +1,5 @@
 from typing import Any
 
-import numpy as np
 import torch
 try:
     import torch_sparse
@@ -140,7 +139,7 @@ class SparseLinear(torch.nn.Module):
                 sigma = float(initialization_type[2:].split(',')[1])
 
             def initialize(i, j, mu=mu, sigma=sigma):
-                return np.random.randn()*sigma + mu
+                return torch.randn(1)*sigma + mu
         elif initialization_type[0] == "U":
             if len(initialization_type) == 1:
                 min = -1.0
@@ -150,7 +149,7 @@ class SparseLinear(torch.nn.Module):
                 max = float(initialization_type[2:].split(',')[1])
 
             def initialize(i, j, min=min, max=max):
-                return np.random.rand()*(max-min) + min
+                return torch.random.rand()*(max-min) + min
         else:
             assert False, "Unknown initialization type"
         return initialize
@@ -171,19 +170,19 @@ class SparseLinear(torch.nn.Module):
             for k in range(row_size):
                 for l in range(n):
                     u.append(k)
-                    v.append(np.random.randint(0, int(col_size)))
+                    v.append(torch.randint(0, int(col_size), (1,)))
                     vals.append(initialize(u[-1], v[-1]))
         elif block_type[0] == "R":
             n = int(float(block_type[2:])*row_size*col_size)
             for k in range(n):
-                u.append(np.random.randint(0, int(row_size)))
-                v.append(np.random.randint(0, int(col_size)))
+                u.append(torch.randint(0, int(row_size), (1,)))
+                v.append(torch.randint(0, int(col_size), (1,)))
                 vals.append(initialize(u[-1], v[-1]))
         elif block_type[0] == "S":
             n = int(block_type[2:])
             for k in range(n):
-                u.append(np.random.randint(0, int(row_size)))
-                v.append(np.random.randint(0, int(col_size)))
+                u.append(torch.randint(0, int(row_size), (1,)))
+                v.append(torch.randint(0, int(col_size), (1,)))
                 vals.append(initialize(u[-1], v[-1]))
         else:
             assert False, "Unknown block type"
