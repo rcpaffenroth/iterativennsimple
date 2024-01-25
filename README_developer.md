@@ -30,3 +30,6 @@ and will create the poetry.toml file that we can submit to git.
 ```bash
 poetry config virtualenvs.in-project true --local
 ```
+
+## pytest and data files
+https://github.com/omarkohl/pytest-datafiles
