@@ -7,18 +7,22 @@ from iterativennsimple.Sequential1D import Sequential1D
 from iterativennsimple.SparseLinear import SparseLinear
 
 import os
+import pathlib
 
-def test_for_Neil():
+def test_for_Neil(long_test=False):
     # This is based on notebooks/4-rcp-MLP.ipynb
 
     # Turn a pandas dataframe into a pytorch tensor
     def df_to_tensor(df):
         return torch.tensor(df.values, dtype=torch.float32)
 
+    # get the path of the current file
+    dir_path = pathlib.Path(os.path.dirname(os.path.realpath(__file__)))
+
     # Read the start data
-    z_start = pd.read_parquet('tests/MNIST_small_start.parquet')
+    z_start = pd.read_parquet(dir_path / 'MNIST_small_start.parquet')
     # Read the target data
-    z_target = pd.read_parquet('tests/MNIST_small_target.parquet')
+    z_target = pd.read_parquet(dir_path / 'MNIST_small_target.parquet')
 
     # Data preprocessing
 
@@ -26,7 +30,11 @@ def test_for_Neil():
     z_target_tensor = df_to_tensor(z_target)
 
     # Only use the given number of samples
-    max_num_samples = 500
+    if long_test:
+        max_num_samples = 500
+    else:
+        max_num_samples = 10
+
     num_samples = min(max_num_samples, z_start_tensor.shape[0])
     z_start_tensor = z_start_tensor[:num_samples]
     z_target_tensor = z_target_tensor[:num_samples]
@@ -108,7 +116,11 @@ def test_for_Neil():
     criterion = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(map.parameters(), lr=0.001)
 
-    max_epochs = 50
+    if long_test:
+        max_epochs = 50
+    else:
+        max_epochs = 2
+
     last_loss = 10**9
     # Train the model
     for epoch in range(max_epochs):
