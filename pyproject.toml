@@ -27,6 +27,7 @@ optional = true
 [tool.poetry.group.dev.dependencies]
 pytest = "7.4.*"
 pylint = "3.0.*"
+nbmake = "1.5.*"
 
 [[tool.poetry.source]]
 name = "pytorch"
