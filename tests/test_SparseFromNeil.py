@@ -1,6 +1,7 @@
 import torch
 import pandas as pd
 
+import iterativennsimple
 from iterativennsimple.Sequential2D import Sequential2D, Identity
 from iterativennsimple.Sequential1D import Sequential1D
 
@@ -17,7 +18,7 @@ def test_for_Neil(long_test=False):
         return torch.tensor(df.values, dtype=torch.float32)
 
     # get the path of the current file
-    dir_path = pathlib.Path(os.path.dirname(os.path.realpath(__file__)))
+    dir_path = pathlib.Path(iterativennsimple.__path__) / '..'
 
     # Read the start data
     z_start = pd.read_parquet(dir_path / 'MNIST_small_start.parquet')
