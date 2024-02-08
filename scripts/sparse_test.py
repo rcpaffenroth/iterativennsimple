@@ -57,6 +57,8 @@ sparse_weights = torch.sparse_coo_tensor(sparse_model.sparse_trainable_indices,
                                          dtype=torch.float32,
                                          device=device)
 
+sparse_weights_csr = sparse_weights.to_sparse_csr()
+
 ic(sparse_weights._indices().shape[1])
 ic(torch.abs(sparse_weights._values()).max())
 ic(torch.abs(sparse_weights._values()).min())
@@ -82,25 +84,31 @@ ic(dense_model.weight.shape)
 
 raw_dense_output = x @ (dense_weights.T)
 raw_sparse_output = x @ (sparse_weights.T)
+# raw_sparse_csr_output = x @ (sparse_weights_csr.T)
+raw_sparse_csr_output = sparse_weights_csr.matmul(x.T).T
 dense_output = dense_model(x)
 sparse_output = sparse_model(x)
 
 ic(raw_dense_output.shape)
 ic(raw_sparse_output.shape)
+ic(raw_sparse_csr_output.shape)
 ic(dense_output.shape)
 ic(sparse_output.shape)
 
 ic(raw_dense_output[:2,:2])
 ic(raw_sparse_output[:2,:2])
+ic(raw_sparse_csr_output[:2,:2])
 ic(dense_output[:2,:2])
 ic(sparse_output[:2,:2])
 
 raw_dense_time = timeit.timeit('x @ (dense_weights.T)', globals=globals(), number=10)
 raw_sparse_time = timeit.timeit('x @ (sparse_weights.T)', globals=globals(), number=10)
+raw_sparse_csr_time = timeit.timeit('sparse_weights_csr.matmul(x.T).T', globals=globals(), number=10)
 dense_time = timeit.timeit('dense_model(x)', globals=globals(), number=10)
 sparse_time = timeit.timeit('sparse_model(x)', globals=globals(), number=10)
 
 ic(raw_dense_time)
 ic(raw_sparse_time)
+ic(raw_sparse_csr_time)
 ic(dense_time)
 ic(sparse_time)
