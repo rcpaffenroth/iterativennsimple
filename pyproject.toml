@@ -20,6 +20,10 @@ matplotlib = "3.8.*"
 ipykernel = "6.26.*"
 ipympl = "0.9.*"
 jupyterlab = "4.0.*"
+# wandb.ai
+wandb = "0.16.*"
+# Command line parsing
+click = "8.1.*"
 
 [tool.poetry.group.dev]
 optional = true
