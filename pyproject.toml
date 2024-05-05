@@ -17,6 +17,7 @@ pandas = "2.1.*"
 pyarrow = "13.0.*"
 # For the notebooks and vscode
 matplotlib = "3.8.*"
+plotly = "5.22.*"
 ipykernel = "6.26.*"
 ipympl = "0.9.*"
 jupyterlab = "4.0.*"

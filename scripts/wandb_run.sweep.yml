@@ -1,0 +1,12 @@
+method: grid
+parameters:
+  data_name:
+    values:
+      - regression_line
+      - circle
+      - MNIST1D
+  model_type:
+    values:
+      - square
+      - non-square
+program: wandb_run.py
