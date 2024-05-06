@@ -146,7 +146,7 @@ def main(**kwargs):
         if epoch % 10 == 0:
             wandb.log({'loss': loss.item()})
         if epoch % 100 == 0:
-            print(f'Epoch {epoch}, Batch {batch_idx}, Loss {loss.item()}')
+            print(f'Epoch {epoch}, Loss {loss.item()}')
 
 if __name__ == '__main__':
     main()
