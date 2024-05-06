@@ -76,8 +76,14 @@ config = {
 # how to set them as command line arguments
 # @click.option("--wandb_entity", default='rcpaffenroth-wpi', help="The wandb entity to use.")
 # @click.option("--wandb_project", default='test', help="The wandb project to use.")
-@click.option("--data_name", default='regression_line', help="The name of the dataset to use.")
-@click.option("--model_type", default='non-square', help="The name of the model to use.")
+@click.option("--data_name", default='regression_line', 
+              help="The name of the dataset to use.")
+@click.option("--model_type", default='non-square', 
+              help="The name of the model to use.")
+@click.option("--gpu", is_flag=True,
+              help="Whether to use a GPU if available.")
+@click.option("--threads", default=1, 
+              help="The number of threads to use.")
 def main(**kwargs):
     """Run the training of the model
 
@@ -90,6 +96,16 @@ def main(**kwargs):
     wandb.init(entity=config['wandb_entity'], 
                project=config['wandb_project'],
                config=config)
+
+    # Set the number of threads
+    torch.set_num_threads(config['threads'])
+
+    # Find out is there is a GPU available
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if not config['gpu']:
+        device = torch.device('cpu')
+    print(f'Using device: {device}')
+
     # Load the data
     z_data = load_data(config['data_name'])
     config['data_size'] = z_data['start'].shape[1]
@@ -97,13 +113,18 @@ def main(**kwargs):
     # Get the model, we call it a map to emphasize the relationship 
     # to the dynamical system
     map = get_model(config['model_type'], config['data_size'])
+    map.to(device)
 
     # Make two pytorch tensor datasets from the start and target data
     z_start_tensor = df_to_tensor(z_data['start'])
     z_target_tensor = df_to_tensor(z_data['start'])
+
+    z_start_tensor = z_start_tensor.to(device)
+    z_target_tensor = z_target_tensor.to(device)
         
-    train_data = StartTargetData(z_start_tensor, z_target_tensor)
-    train_loader = torch.utils.data.DataLoader(train_data, batch_size=100, shuffle=True)
+    train_data = StartTargetData(z_start_tensor, z_target_tensor)  
+    train_loader = torch.utils.data.DataLoader(train_data, batch_size=100, 
+                                               shuffle=True)
 
     # Define the loss function and optimizer
     criterion = torch.nn.MSELoss()
