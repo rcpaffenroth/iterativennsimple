@@ -9,4 +9,6 @@ parameters:
     values:
       - square
       - non-square
-program: wandb_run.py
+program: run_demo.py
+entity: rcpaffenroth-wpi
+project: test-sweep

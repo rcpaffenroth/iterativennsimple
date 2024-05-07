@@ -4,34 +4,12 @@
 # simialr to a jupyter notebook using an appropriate IDE (such as VSCode)
 
 # Import necessary libraries
-import pathlib
 import torch
 import wandb
-import pandas as pd
 import click
-import iterativennsimple
 from iterativennsimple.utils.df_to_tensor import df_to_tensor
 from iterativennsimple.utils.StartTargetData import StartTargetData
-
-def load_data(name: str) -> dict:
-    """Load in the dataset with the given name
-
-    Args:
-        name (str): the name of the dataset
-
-    Returns:
-        dict: the start and target points of the dataset
-    """
-    # The directory in which the notebook is located.
-    base_dir = pathlib.Path(iterativennsimple.__path__[0])
-    # The directory where the data is stored.
-    data_dir = base_dir / '../data/processed'
-
-    # Read the start data
-    z_start = pd.read_parquet(data_dir / f'{name}_start.parquet')
-    # Read the target data
-    z_target = pd.read_parquet(data_dir / f'{name}_target.parquet')
-    return {'start': z_start, 'target': z_target}
+from iterativennsimple.utils.load_data import load_data
 
 def get_model(model_type: str, size: int) -> torch.nn.Module:
     """Generate a model of the given type
