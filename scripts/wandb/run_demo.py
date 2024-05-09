@@ -95,7 +95,7 @@ def main(**kwargs):
 
     # Make two pytorch tensor datasets from the start and target data
     z_start_tensor = df_to_tensor(z_data['start'])
-    z_target_tensor = df_to_tensor(z_data['start'])
+    z_target_tensor = df_to_tensor(z_data['target'])
 
     z_start_tensor = z_start_tensor.to(device)
     z_target_tensor = z_target_tensor.to(device)
