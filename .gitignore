@@ -1,3 +1,6 @@
+# wandb stuff
+wandb/
+
 # tensorboard stuff
 runs/
 
