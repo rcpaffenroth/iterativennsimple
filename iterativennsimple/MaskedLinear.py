@@ -299,7 +299,6 @@ class MaskedLinear(torch.nn.Module):
             True:  block is trainable
             False:  block is not trainable
             'non-zero': the non-zero entries are trainable
-
         """
         # Take care of the case where I want just a single block
         if (type(row_sizes) is int) and (type(col_sizes) is int):
@@ -500,7 +499,7 @@ class MaskedLinear(torch.nn.Module):
         return A
     
     @staticmethod
-    def from_optimal_linear(X, Y, bias: bool = True, device=None, dtype=None) -> Any:
+    def from_optimal_linear(X, Y, bias: bool = False, device=None, dtype=None) -> Any:
         """
         TODO: need to update this method to adopt recent changes in yaml
         This function initializes the initial weights "weight_0" and the update "U" 
@@ -537,10 +536,10 @@ class MaskedLinear(torch.nn.Module):
         with torch.no_grad():
             W_init = (torch.inverse(X.T @ X)@X.T@Y).T
             # The requires_grad=False is important, otherwise the gradient will be computed when we don't want it to.
-            A.weight_0[:, :] = bmatrix([[torch.eye(X_size), torch.zeros(X_size, Y_size)],
-                                        [W_init,             torch.zeros(Y_size, Y_size)]])
-            A.mask[:, :] = bmatrix([[torch.zeros(X_size, X_size), torch.zeros(X_size, Y_size)],
-                                    [torch.zeros(Y_size, X_size), torch.zeros(Y_size, Y_size)]]) 
+            A.weight_0[:, :] = bmatrix([[torch.eye(X_size, device=device), torch.zeros(X_size, Y_size, device=device)],
+                                        [W_init,                           torch.zeros(Y_size, Y_size, device=device)]])
+            A.mask[:, :] = bmatrix([[torch.zeros(X_size, X_size, device=device), torch.zeros(X_size, Y_size, device=device)],
+                                    [torch.zeros(Y_size, X_size, device=device), torch.zeros(Y_size, Y_size, device=device)]])
         return A
 
     def reset_parameters(self) -> None:
