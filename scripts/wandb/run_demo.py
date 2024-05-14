@@ -196,7 +196,7 @@ def main(**kwargs):
             # This is the step where we update the weights
             optimizer.step()
         if epoch % 10 == 0:
-            # An example of logging the loss every 100 epochs
+            # An example of logging the loss every n epochs
             logging.info('Epoch %s, Loss %s', epoch, total_loss.item())
 
 if __name__ == '__main__':
