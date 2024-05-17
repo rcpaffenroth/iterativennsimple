@@ -192,7 +192,8 @@ transform = transforms.Compose([
 mnist_dataset = datasets.MNIST(root='../data/external/', train=True, download=True, transform=transform)
 
 # Define the number of digits and the dimensionality of each vector
-num_digits = 60000
+# num_digits = 60000
+num_digits = 1000
 vector_dim = 28 * 28
 
 # Create a list of PyTorch tensors containing the MNIST digits
