@@ -232,10 +232,13 @@ X = torch.load('../data/raw/EM_X_train.pt')
 Y = torch.load('../data/raw/EM_Y_train.pt')
 x_on = torch.cat((X, Y), dim=1)
 
+y_max = x_on[:, -1].max()
+y_min = x_on[:, -1].min()
+x_on[:, -1] = (x_on[:, -1] - y_min) / (y_max - y_min)
+
 # Now set the last entry of x_off to be a random range in the same range as the target
 x_off = x_on.clone()
-#x_off[:, -1].uniform_(float(x_on[:,-1].min()), float(x_on[:,-1].max()))
-x_off[:, -1] += torch.randn(x_off[:, -1].shape)*5000.0
+x_off[:, -1] = 0
 
 start_data = {f'x{i}': x_off[:,i] for i in range(x_off.shape[1])}
 target_data = {f'x{i}': x_on[:,i] for i in range(x_on.shape[1])}
