@@ -265,3 +265,20 @@ start_data = {f'x{i}': x_off[:,i] for i in range(x_off.shape[1])}
 target_data = {f'x{i}': x_on[:,i] for i in range(x_on.shape[1])}
 save_data(data_dir, name, start_data, target_data, x_y_index=404)
 
+#########################
+# Mass spectrometry
+#########################
+name = 'MassSpec'
+# Load the mass spec dataset from a parquet file
+mass_spec_df = pd.read_parquet('../data/raw/mass_spec.parquet')
+
+# Reorder the columns so that the chemception features are at the end
+# This means moving columns 915-1426 to the end
+new_order = list(mass_spec_df.columns[:915]) + list(mass_spec_df.columns[1427:-1]) + list(mass_spec_df.columns[915:1427])
+start_data = mass_spec_df[new_order]
+target_data = mass_spec_df[new_order]
+
+pd.options.mode.copy_on_write = True
+start_data.iloc[:, -512:] = 0.0
+
+save_data(data_dir, name, start_data, target_data, x_y_index=1433-512)
