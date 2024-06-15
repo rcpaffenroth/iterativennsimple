@@ -22,7 +22,7 @@ ipykernel = "6.26.*"
 ipympl = "0.9.*"
 jupyterlab = "4.0.*"
 # wandb.ai
-wandb = "0.16.*"
+wandb = "0.17.*"
 # Command line parsing
 click = "8.1.*"
 
