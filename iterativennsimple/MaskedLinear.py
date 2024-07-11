@@ -96,7 +96,7 @@ class MaskedLinear(torch.nn.Module):
         self.mask = torch.nn.parameter.Parameter(torch.empty((out_features, in_features), requires_grad=False, **factory_kwargs), requires_grad=False)
 
         if bias:
-            self.bias = torch.nn.parameter.Parameter(torch.empty(out_features, **factory_kwargs))
+            self.bias = torch.nn.parameter.Parameter(torch.empty(out_features, requires_grad=True, **factory_kwargs), requires_grad=True)
         else:
             self.register_parameter('bias', None)
         # Note, self.mask gets set to 1 and self.U get set to 0 in here.
