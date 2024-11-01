@@ -9,8 +9,8 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.10"
 # For the computational code
-torch = {version = "2.1.0", source = "pytorch"}
-torchvision = {version = "0.16.0", source = "pytorch"}
+torch = {version = "2.5.*", source = "pytorch"}
+torchvision = {version = "0.20.*", source = "pytorch"}
 numpy = "1.25.*"
 # For data
 pandas = "2.1.*"
