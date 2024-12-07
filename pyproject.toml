@@ -9,20 +9,20 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.10"
 # For the computational code
-torch = {version = "2.5.*", source = "pytorch"}
+torch = {version = "2.5.1", source = "pytorch"}
 torchvision = {version = "0.20.*", source = "pytorch"}
-numpy = "1.25.*"
+numpy = "2.1.*"
 # For data
-pandas = "2.1.*"
-pyarrow = "13.0.*"
+pandas = "2.2.*"
+pyarrow = "18.1.*"
 # For the notebooks and vscode
-matplotlib = "3.8.*"
-plotly = "5.22.*"
-ipykernel = "6.26.*"
+matplotlib = "3.9.*"
+plotly = "5.24.*"
+ipykernel = "6.29.*"
 ipympl = "0.9.*"
-jupyterlab = "4.0.*"
+jupyterlab = "4.3.*"
 # wandb.ai
-wandb = "0.17.*"
+wandb = "0.19.*"
 # Command line parsing
 click = "8.1.*"
 
@@ -51,12 +51,12 @@ torch-sparse = {version = "*", source="torch-sparse"}
 
 [[tool.poetry.source]]
 name = "torch-sparse"
-url = "https://data.pyg.org/whl/torch-2.1.0+cu118.html"
+url = "https://data.pyg.org/whl/torch-2.5.1+cu121.html"
 priority = "explicit"
 
 [[tool.poetry.source]]
 name = "pytorch"
-url = "https://download.pytorch.org/whl/cu118"
+url = "https://download.pytorch.org/whl/cu121"
 priority = "explicit"
 
 [build-system]
