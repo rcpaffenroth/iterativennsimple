@@ -101,14 +101,13 @@ def test_fromOptimalLinear():
     diff_is_small = torch.isclose(z_hat, z_true)
     assert not torch.all(diff_is_small)
 
+# def test_from_grown_model():
+#     sizes=[20, 30]
+#     sizes_map=['x', 'y']
 
-def test_from_grown_model():
-    sizes=[20, 30]
-    sizes_map=['x', 'y']
-
-    model = MaskedLinear.from_MLP(sizes=sizes)
-    grown_model = MaskedLinear.from_grown_model(model, added_columns=5, added_rows=5)
-    assert grown_model.weight_0.size() == (20+30 + 5, 20+30 + 5)
+#     model = MaskedLinear.from_MLP(sizes=sizes)
+#     grown_model = MaskedLinear.from_grown_model(model, added_columns=5, added_rows=5)
+#     assert grown_model.weight_0.size() == (20+30 + 5, 20+30 + 5)
 
 def test_fromMLP():
     tml = GetMaskedLinear()
@@ -136,4 +135,17 @@ def test_fromDescription():
                                    trainable=trainable)
     assert model.weight_0.size() == (5 + 7 + 9, 6 + 8 + 10)
 
+def test_fromCOO():
+    coo = torch.sparse_coo_tensor(indices=torch.tensor([[0, 1, 2], [0, 1, 2]]),
+                                  values=torch.tensor([1.0, 2.0, 3.0]),
+                                  size=(3, 3))                                                
+    model = MaskedLinear.from_coo(coo, bias=False)
 
+    assert model.weight_0.size() == (3, 3)
+
+    x = torch.randn(13, 3)
+    y1 = model(x)
+    y2 = coo @ x.T
+
+    diff_is_small = torch.isclose(y1, y2.T)
+    assert torch.all(diff_is_small)

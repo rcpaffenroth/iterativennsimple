@@ -34,15 +34,11 @@ class MaskedLinear(torch.nn.Module):
     optimizers can be used with this implementation.
 
     Args:
-        in_features: size of each input sample
-        out_features: size of each output sample
-        bias: If set to ``False``, the layer will not learn an additive bias.
-            Default: ``True``
-        mask: The mask to apply to the linear transformation.   Note, this 
-            can contain floating point numbers.  The mask is applied to the
-            update so, if the mask contains a 0, then the update is set to 0
-            and that entry is not updated by the gradient.
-
+        in_features (int): size of each input sample
+        out_features(int): size of each output sample
+        bias (bool, optional): Include a bias term. Defaults to True.
+        device (optional): The device to use (e.g. CPU vs GPU). Defaults to None.
+        dtype (optional): The data type to use (e.g. float32 vs float64). Defaults to None.
     Shape:
         - Input: :math:`(*, H_{in})` where :math:`*` means any number of
         dimensions including none and :math:`H_{in} = \text{in\_features}`.
@@ -81,10 +77,6 @@ class MaskedLinear(torch.nn.Module):
         super(MaskedLinear, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
-        # this is default behaviour
-        self.x_index_list = list(range(in_features)) # 0-99
-        self.y_index_list = list(range(in_features, in_features+out_features)) # 100-110
-        self.h_index_list = []
 
         # The initial weights do not require gradients.
         self.weight_0 = torch.nn.parameter.Parameter(torch.empty((out_features, in_features), requires_grad=False, **factory_kwargs), requires_grad=False)
@@ -101,48 +93,6 @@ class MaskedLinear(torch.nn.Module):
             self.register_parameter('bias', None)
         # Note, self.mask gets set to 1 and self.U get set to 0 in here.
         self.reset_parameters()
-
-    @property
-    def x_index_list(self):
-        return self._x_index_list
-
-    @x_index_list.setter
-    def x_index_list(self, val):
-        self._x_index_list = val
-
-    @property
-    def h_index_list(self):
-        return self._h_index_list
-
-    @h_index_list.setter
-    def h_index_list(self, val):
-        self._h_index_list = val
-
-    @property
-    def y_index_list(self):
-        return self._y_index_list
-
-    @y_index_list.setter
-    def y_index_list(self, val):
-        self._y_index_list = val
-
-    @property
-    def in_features(self):
-        return self._in_features
-
-    @in_features.setter
-    def in_features(self, val):
-        self._in_features = val
-
-    @property
-    def out_features(self):
-        return self._out_features
-
-    @out_features.setter
-    def out_features(self, val):
-        self._out_features = val
-
-
 
     @staticmethod
     def _getBlock(initialize, block_type, row_size, col_size):
@@ -225,6 +175,38 @@ class MaskedLinear(torch.nn.Module):
         else:
             assert False, f"Unknown initialization type {initialization_type}"
         return initialize
+
+    @staticmethod
+    def from_coo(coo, check_mask: bool = False, bias: bool = True, device=None, dtype=None) -> Any:
+        """
+        Create a MaskedLinear from a sparse COO matrix.
+
+        Args:
+            coo (dict): the COO matrix
+            bias (bool, optional): Include a bias term. Defaults to True.
+            device (optional): The device to use (e.g. CPU vs GPU). Defaults to None.
+            dtype (optional): The data type to use (e.g. float32 vs float64). Defaults to None.
+
+        Returns:
+            MaskedLinear: a MaskedLinear object from the configuration
+        """
+        A = MaskedLinear(in_features=coo.shape[1], 
+                         out_features=coo.shape[0],
+                         bias=bias, device=device, dtype=dtype)
+        with torch.no_grad():
+            # The weights are just the COO matrix in dense form
+            A.weight_0[:, :] = coo.to_dense()
+            # The mask is 1 where the COO matrix is non-zero
+            A.mask[:, :] = (A.weight_0[:, :] != 0)
+            if check_mask:
+                # In some cases we want to check that the mask is correct in that there might
+                # be a zero value in the COO that is not in the mask and therefore not trainable.  
+                # This is a sanity check which is slow, so we don't want to do it all the time.
+                for idx in range(coo.indices()):
+                    i = idx[0]
+                    j = idx[1]
+                    assert A.mask[i, j] != 0, f"mask is not correct at {i},{j}"
+        return A
 
     @staticmethod
     def from_config(cfg):
@@ -377,11 +359,6 @@ class MaskedLinear(torch.nn.Module):
             for i,rows in enumerate(row_sizes):
                 for j,cols in enumerate(col_sizes):
                     # The MLP is right below the diagonal, so we need to offset the index
-                    ###########################
-                    #  DEPRECATED
-                    #  FIXME:  Remove once Harsh does not need anymore
-                    # 
-                    ###########################
                     if i == j+1:
                         # Only these blocks are initialized and trained
                         weight_0[i][j] = torch.zeros(row_sizes[i], col_sizes[j])
@@ -397,111 +374,10 @@ class MaskedLinear(torch.nn.Module):
             A.mask[:, :] = bmatrix(mask) 
     
             return A
-
-
-    @staticmethod
-    def from_grown_model(model, added_columns: int, added_rows: int,
-                   bias: bool = True, device=None, dtype=None, mask_keep=1.0) -> Any:
-        """
-        Take the given model and add additional trainable rows and columns
-
-        Args:
-            model:  A MaskedLinear model to grow
-            added_columns (int):  The number of columns to add.
-            added_row (int):  The number of rows to add.        
-            bias (bool, optional): _description_. Defaults to True.
-            device (_type_, optional): _description_. Defaults to None.
-            dtype (_type_, optional): _description_. Defaults to None.
-            mask_keep : between (0,1] to variable impact of gradients
-
-        Returns:
-            MaskedLinear: A MaskedLinear with additional rows and columns
-        """
-
-        columns = model.in_features
-        rows = model.out_features
-
-        A = MaskedLinear(in_features=columns+added_columns, 
-                         out_features=rows+added_rows,
-                         bias=bias, device=device, dtype=dtype)
-
-        with torch.no_grad():
-            # The requires_grad=False is important, otherwise the gradient will be computed when we don't want it to.
-            A.weight_0[:, :] = bmatrix([[model.weight_0,                   torch.zeros(rows, added_columns)],
-                                        [torch.zeros(added_rows, columns), torch.zeros(added_rows, added_columns)]])
-            # zero padding for the row band
-            # when, compresed is set to False,
-            # don't train the first row and set them to zeros
-
-            A.U[:, :] = bmatrix([[torch.nn.Parameter(model.U, requires_grad=True),                        torch.nn.Parameter(torch.zeros(rows, added_columns), requires_grad=True)],
-                                [torch.nn.Parameter(torch.zeros(added_rows, columns), requires_grad=True), torch.nn.Parameter(torch.zeros(added_rows, added_columns), requires_grad=True)]])
-
-            A.mask[:, :] = bmatrix([[model.mask,                      mask_keep*torch.ones(rows, added_columns)],
-                                    [mask_keep*torch.ones(added_rows, columns), mask_keep*torch.ones(added_rows, added_columns)]])
-            """
-            Given these values from config, below code (for loop) will record index values of data accordingly 
-            {x}_index_list for inputs are copied as is,
-            {y}_index_list for outputs are copied as is,
-            {h}_index_list for latent spaces are copied and new addition latent indices are extended to the list, 
-            """
-            A.h_index_list = model.h_index_list[:]
-            prev_h_set = set(model.h_index_list)
-            prev_h_set.update(set(list(range(columns, columns+added_columns))))
-            A.h_index_list = list(prev_h_set)
-            # this overrides the default list created during object creation of A
-            A.x_index_list = model.x_index_list[:]
-            A.y_index_list = model.y_index_list[:]
-    
-        return A
-
-    @staticmethod
-    def from_shrink_model(model, removed_columns: int, removed_rows: int,
-                          bias: bool = True, device=None, dtype=None) -> Any:
-        """
-        Take the given model and remove additional trainable rows and columns
-
-        Args:
-            model:  A MaskedLinear model to grow
-            removed_columns (int):  The number of columns to remove.
-            removed_rows (int):  The number of rows to remove.
-            bias (bool, optional): _description_. Defaults to True.
-            device (_type_, optional): _description_. Defaults to None.
-            dtype (_type_, optional): _description_. Defaults to None.
-
-        Returns:
-            MaskedLinear: A MaskedLinear with additional rows and columns
-        """
-        columns = model.in_features
-        rows = model.out_features
-
-        A = MaskedLinear(in_features=columns - removed_columns,
-                         out_features=rows - removed_rows,
-                         bias=bias, device=device, dtype=dtype)
-        with torch.no_grad():
-            # The requires_grad=False is important, otherwise the gradient will be computed when we don't want it to.
-            A.weight_0[:, :] = model.weight_0[:(rows - removed_rows), :(columns - removed_columns)]
-            A.U[:, :] = model.U[:(rows - removed_rows), :(columns - removed_columns)]
-            A.mask[:, :] = model.mask[:(rows - removed_rows), :(columns - removed_columns)]
-
-            """
-            Given these values from config, below code (for loop) will record index values of data accordingly 
-            {x}_index_list for inputs are copied as is,
-            {y}_index_list for outputs are copied as is,
-            {h}_index_list for latent spaces are copied and relevant latent indices are removed from the list,
-            """
-            A.h_index_list = model.h_index_list[:]
-            A.h_index_list = list(set(A.h_index_list) - set(list(range(columns-removed_columns, columns))))
-            # this overrides the default list created during object creation of A
-            # this overrides the default list created during object creation of A
-            A.x_index_list = model.x_index_list[:]
-            A.y_index_list = model.y_index_list[:]
-
-        return A
     
     @staticmethod
     def from_optimal_linear(X, Y, bias: bool = False, device=None, dtype=None) -> Any:
         """
-        TODO: need to update this method to adopt recent changes in yaml
         This function initializes the initial weights "weight_0" and the update "U" 
         to be the optimal least squares solution to the linear regression problem
         which maps the input X to the output Y.  This is done by computing
