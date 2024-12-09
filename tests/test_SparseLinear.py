@@ -117,3 +117,16 @@ def test_fromDescription_exact():
     output_sparse_model = sparse_model(input)
     diff_is_small = torch.isclose(output_sparse_model, output_sparse_model_exact, atol=1e-6)
     assert torch.all(diff_is_small)
+
+def test_fromCOO():
+    coo = torch.sparse_coo_tensor(indices=torch.tensor([[0, 1, 2], [0, 1, 2]]),
+                                  values=torch.tensor([1.0, 2.0, 3.0]),
+                                  size=(3, 3))                                                
+    model = SparseLinear.from_coo(coo, bias=False, transpose=True)
+
+    x = torch.randn(13, 3)
+    y1 = model(x)
+    y2 = coo @ x.T
+
+    diff_is_small = torch.isclose(y1, y2.T)
+    assert torch.all(diff_is_small)

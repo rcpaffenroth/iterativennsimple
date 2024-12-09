@@ -190,6 +190,19 @@ class SparseLinear(torch.nn.Module):
         return torch.sparse_coo_tensor(torch.stack([torch.tensor(u), torch.tensor(v)]), torch.tensor(vals), (row_size, col_size))
 
     @staticmethod
+    def from_coo(coo,
+                 optimized_implementation: bool = True,  transpose: bool = True,
+                 bias: bool = True, device=None, dtype=None) -> Any:
+        """
+        Create a sparse matrix from a COO tensor.
+        Args:
+            coo: A COO tensor
+        """
+        A = SparseLinear(coo, None, optimized_implementation=optimized_implementation, 
+                         transpose=transpose, bias=bias, device=device, dtype=dtype)
+        return A
+
+    @staticmethod
     def from_singleBlock(row_size, col_size, block_type, initialization_type, 
                          optimized_implementation: bool = True,  transpose: bool = False,
                          bias: bool = True, device=None, dtype=None) -> Any:
@@ -236,6 +249,7 @@ class SparseLinear(torch.nn.Module):
     @staticmethod
     def from_MaskedLinear(M: MaskedLinear, 
                           optimized_implementation: bool = True, 
+                          transpose: bool = True, 
                           device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a masked matrix.  This is a simpler and faster version of from_MaskedLinearExact.
@@ -251,11 +265,13 @@ class SparseLinear(torch.nn.Module):
             if not M.bias is None:
                 A = SparseLinear(sparse_trainable, None, 
                                  optimized_implementation=optimized_implementation, 
+                                 transpose=transpose,
                                  bias=True, device=device, dtype=dtype)
                 A.bias[:] = M.bias[:] 
             else:
                 A = SparseLinear(sparse_trainable, None, 
-                                 optimized_implementation=optimized_implementation , 
+                                 optimized_implementation=optimized_implementation, 
+                                 transpose=transpose,
                                  bias=False, device=device, dtype=dtype)
         return A
 
