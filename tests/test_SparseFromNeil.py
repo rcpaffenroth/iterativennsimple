@@ -57,22 +57,22 @@ def test_for_Neil(long_test=False):
 
     I = Identity(in_features=input_size, out_features=input_size)
 
-    l1 = SparseLinear.from_singleBlock(col_size=input_size, row_size=h1_size,  
-                                    block_type=sparsity, initialization_type='G=0.0,0.001', 
-                                    optimized_implementation=True)
+    l1 = SparseLinear.from_singleBlock(in_features=input_size, out_features=h1_size,  
+                                       block_type=sparsity, initialization_type='G=0.0,0.001', 
+                                       optimized_implementation=True)
     f1 = Sequential1D(l1, 
                     torch.nn.ReLU(), 
                     in_features=input_size, out_features=h1_size)
 
 
-    l2 = SparseLinear.from_singleBlock(col_size=h1_size, row_size=h2_size,  
+    l2 = SparseLinear.from_singleBlock(in_features=h1_size, out_features=h2_size,  
                                     block_type=sparsity, initialization_type='G=0.0,0.001', 
                                     optimized_implementation=True)
     f2 = Sequential1D(l2, 
                     torch.nn.ReLU(), 
                     in_features=h1_size,    out_features=h2_size)
 
-    f3 = SparseLinear.from_singleBlock(col_size=h2_size, row_size=output_size,  
+    f3 = SparseLinear.from_singleBlock(in_features=h2_size, out_features=output_size,  
                                     block_type=sparsity, initialization_type='G=0.0,0.001', 
                                     optimized_implementation=True)
 

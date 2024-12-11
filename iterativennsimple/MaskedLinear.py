@@ -95,24 +95,24 @@ class MaskedLinear(torch.nn.Module):
         self.reset_parameters()
 
     @staticmethod
-    def _getBlock(initialize, block_type, row_size, col_size):
+    def _getBlock(initialize, block_type, out_features, in_features):
         if block_type == 0:
-            block = torch.zeros((row_size, col_size))
+            block = torch.zeros((out_features, in_features))
         elif block_type == "W":
             block = np.fromfunction(np.vectorize(initialize), 
-                                    (row_size, col_size))
+                                    (out_features, in_features))
             block = torch.tensor(block)
         elif block_type[0] == "D":
-            block = torch.zeros((row_size, col_size))
-            n = torch.min(row_size, col_size)
+            block = torch.zeros((out_features, in_features))
+            n = torch.min(out_features, in_features)
             for k in range(n):
                 block[k, k] = initialize(k, k)
         elif block_type[0:3] == "Row":
             n = int(block_type[4:])
-            block = torch.zeros((row_size, col_size))
-            for k in range(row_size):
+            block = torch.zeros((out_features, in_features))
+            for k in range(out_features):
                 for l in range(n):
-                    v = np.random.randint(0, int(col_size))
+                    v = np.random.randint(0, int(in_features))
                     block[k, v] = initialize(k, v)
         elif block_type[0] == "R":
             def func(k, l, p=float(block_type[2:])):
@@ -121,14 +121,14 @@ class MaskedLinear(torch.nn.Module):
                 else:
                     return 0.0
             block = np.fromfunction(np.vectorize(func), 
-                                    (row_size, col_size))
+                                    (out_features, in_features))
             block = torch.tensor(block)
         elif block_type[0] == "S":
             n = int(block_type[2:])
-            block = torch.zeros((row_size, col_size))
+            block = torch.zeros((out_features, in_features))
             for k in range(n):
-                u = np.random.randint(0, int(row_size))
-                v = np.random.randint(0, int(col_size))
+                u = np.random.randint(0, int(out_features))
+                v = np.random.randint(0, int(in_features))
                 block[u, v] = initialize(u, v)
         else:
             assert False, "Unknown block type"
@@ -219,15 +219,15 @@ class MaskedLinear(torch.nn.Module):
         Returns:
             MaskedLinear: a MaskedLinear object from the configuration
         """
-        return MaskedLinear.from_description(row_sizes=cfg['row_sizes'],
-                                            col_sizes=cfg['col_sizes'],
+        return MaskedLinear.from_description(out_features_sizes=cfg['out_features_sizes'],
+                                            in_features_sizes=cfg['in_features_sizes'],
                                             block_types=cfg['block_types'],
                                             initialization_types=cfg['initialization_types'],
                                             trainable=cfg['trainable'],
                                             bias=cfg['bias'])
 
     @staticmethod
-    def from_description(row_sizes, col_sizes,
+    def from_description(out_features_sizes, in_features_sizes,
                          block_types,
                          initialization_types,
                          trainable,
@@ -283,45 +283,45 @@ class MaskedLinear(torch.nn.Module):
             'non-zero': the non-zero entries are trainable
         """
         # Take care of the case where I want just a single block
-        if (type(row_sizes) is int) and (type(col_sizes) is int):
-            row_sizes = [row_sizes]
-            col_sizes = [col_sizes]
+        if (type(out_features_sizes) is int) and (type(in_features_sizes) is int):
+            out_features_sizes = [out_features_sizes]
+            in_features_sizes = [in_features_sizes]
             block_types = [[block_types]]
             initialization_types = [[initialization_types]]
             trainable = [[trainable]]
 
-        row_sizes = torch.tensor(row_sizes)
-        col_sizes = torch.tensor(col_sizes)
+        out_features_sizes = torch.tensor(out_features_sizes)
+        in_features_sizes = torch.tensor(in_features_sizes)
 
-        A = MaskedLinear(in_features=int(torch.sum(col_sizes)), 
-                         out_features=int(torch.sum(row_sizes)),
+        A = MaskedLinear(in_features=int(torch.sum(in_features_sizes)), 
+                         out_features=int(torch.sum(out_features_sizes)),
                          bias=bias, device=device, dtype=dtype)
 
-        weight_0 = [[None]*len(col_sizes) for i in range(len(row_sizes))]
-        mask = [[None]*len(col_sizes) for i in range(len(row_sizes))]
+        weight_0 = [[None]*len(in_features_sizes) for i in range(len(out_features_sizes))]
+        mask = [[None]*len(in_features_sizes) for i in range(len(out_features_sizes))]
 
         with torch.no_grad():
-            for current_row in range(len(row_sizes)):
-                for current_col in range(len(col_sizes)):
+            for current_row, out_features in enumerate(out_features_sizes):
+                for current_col, in_features in enumerate(in_features_sizes):
                     block_type = block_types[current_row][current_col]
                     train = trainable[current_row][current_col]
                     initialization_type = initialization_types[current_row][current_col]
                     if block_type == 0:
-                        assert train == False, "0 block should not be trainable"
+                        assert not train, "0 block should not be trainable"
                         assert initialization_type == 0, "0 block should be initialized to 0"
 
                     initialize = MaskedLinear._getInitializer(initialization_type)
 
                     # The implementations of the various block types
                     block = MaskedLinear._getBlock(initialize, block_type,
-                                                   row_sizes[current_row], col_sizes[current_col])
+                                                   out_features, in_features)
                     weight_0[current_row][current_col] = block
                     if train==True:
-                        mask[current_row][current_col] = torch.ones(row_sizes[current_row], col_sizes[current_col])
+                        mask[current_row][current_col] = torch.ones(out_features, in_features)
                     elif train==False:
-                        mask[current_row][current_col] = torch.zeros(row_sizes[current_row], col_sizes[current_col])
+                        mask[current_row][current_col] = torch.zeros(out_features, in_features)
                     elif train=='non-zero':
-                        mask[current_row][current_col] = torch.zeros(row_sizes[current_row], col_sizes[current_col])
+                        mask[current_row][current_col] = torch.zeros(out_features, in_features)
                         mask[current_row][current_col][block != 0.0] = 1
                     else:
                         assert False, f"unknow train type {train}"
@@ -346,28 +346,28 @@ class MaskedLinear(torch.nn.Module):
         """
         # Each entry in sizes give rise to a kxk block on the diagonal of the matrix, the the total size
         # is the sum of the entries in sizes.
-        row_sizes = sizes
-        col_sizes = sizes
+        out_features_sizes = sizes
+        in_features_sizes = sizes
 
-        A = MaskedLinear(in_features=int(torch.sum(torch.Tensor(col_sizes))), 
-                         out_features=int(torch.sum(torch.Tensor(row_sizes))),
+        A = MaskedLinear(in_features=int(torch.sum(torch.Tensor(in_features_sizes))),
+                         out_features=int(torch.sum(torch.Tensor(out_features_sizes))),
                          bias=bias, device=device, dtype=dtype)
 
-        weight_0 = [[None]*len(col_sizes) for i in range(len(row_sizes))]
-        mask = [[None]*len(col_sizes) for i in range(len(row_sizes))]
+        weight_0 = [[None]*len(in_features_sizes) for i in range(len(out_features_sizes))]
+        mask = [[None]*len(in_features_sizes) for i in range(len(out_features_sizes))]
         with torch.no_grad():
-            for i,rows in enumerate(row_sizes):
-                for j,cols in enumerate(col_sizes):
+            for i,rows in enumerate(out_features_sizes):
+                for j,cols in enumerate(in_features_sizes):
                     # The MLP is right below the diagonal, so we need to offset the index
                     if i == j+1:
                         # Only these blocks are initialized and trained
-                        weight_0[i][j] = torch.zeros(row_sizes[i], col_sizes[j])
+                        weight_0[i][j] = torch.zeros(rows, cols)
                         torch.nn.init.kaiming_uniform_(weight_0[i][j], a=math.sqrt(5))
-                        mask[i][j] = torch.ones(row_sizes[i], col_sizes[j])
+                        mask[i][j] = torch.ones(rows, cols)
                     ###########################
                     else:
-                        weight_0[i][j] = torch.zeros(row_sizes[i], col_sizes[j])
-                        mask[i][j] = torch.zeros(row_sizes[i], col_sizes[j])
+                        weight_0[i][j] = torch.zeros(rows, cols)
+                        mask[i][j] = torch.zeros(rows, cols)
 
             # The requires_grad=False is important, otherwise the gradient will be computed when we don't want it to.
             A.weight_0[:, :] = bmatrix(weight_0)

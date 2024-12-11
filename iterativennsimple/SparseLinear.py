@@ -154,38 +154,38 @@ class SparseLinear(torch.nn.Module):
         return initialize
 
     @staticmethod
-    def _getBlock(initialize, block_type, row_size, col_size):
+    def _getBlock(initialize, block_type, out_features, in_features):
         u = []
         v = []
         vals = []
         if block_type[0] == "D":
-            n = min(row_size, col_size)
+            n = min(out_features, in_features)
             for k in range(n):
                 u.append(k)
                 v.append(k)
                 vals.append(initialize(k, k))
         elif block_type[0:3] == "Row":
             n = int(block_type[4:])
-            for k in range(row_size):
+            for k in range(out_features):
                 for l in range(n):
                     u.append(k)
-                    v.append(np.random.randint(0, int(col_size)))
+                    v.append(np.random.randint(0, int(in_features)))
                     vals.append(initialize(u[-1], v[-1]))
         elif block_type[0] == "R":
-            n = int(float(block_type[2:])*row_size*col_size)
+            n = int(float(block_type[2:])*out_features*in_features)
             for k in range(n):
-                u.append(np.random.randint(0, int(row_size)))
-                v.append(np.random.randint(0, int(col_size)))
+                u.append(np.random.randint(0, int(out_features)))
+                v.append(np.random.randint(0, int(in_features)))
                 vals.append(initialize(u[-1], v[-1]))
         elif block_type[0] == "S":
             n = int(block_type[2:])
             for k in range(n):
-                u.append(np.random.randint(0, int(row_size)))
-                v.append(np.random.randint(0, int(col_size)))
+                u.append(np.random.randint(0, int(out_features)))
+                v.append(np.random.randint(0, int(in_features)))
                 vals.append(initialize(u[-1], v[-1]))
         else:
             assert False, "Unknown block type"
-        return torch.sparse_coo_tensor(torch.stack([torch.tensor(u), torch.tensor(v)]), torch.tensor(vals), (row_size, col_size))
+        return torch.sparse_coo_tensor(torch.stack([torch.tensor(u), torch.tensor(v)]), torch.tensor(vals), (out_features, in_features))
 
     def to_coo(self):
         """Returns a COO tensor representation of the sparse matrix.
@@ -210,14 +210,14 @@ class SparseLinear(torch.nn.Module):
         return A
 
     @staticmethod
-    def from_singleBlock(row_size, col_size, block_type, initialization_type,
+    def from_singleBlock(out_features, in_features, block_type, initialization_type,
                          optimized_implementation: bool = True,
                          bias: bool = True, device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a single block description.
         Args:
-            row_sizes: The number of rows in the matrix
-            col_sizes: The number of columns in the matrix
+            out_features: The number of rows in the matrix
+            in_features: The number of columns in the matrix
             block_type: A string describing the block type. 
                 "D": A block with all off-diagonal entries 0 and only the diagonal 
                         entries initialized. Note either all entries are trainable or all entries are not trainable.  (i.e., 0 entries are trainable if all entries are trainable).  This is a limitation of the current implementation.
@@ -246,9 +246,9 @@ class SparseLinear(torch.nn.Module):
                 "U=-0.5,0.5": Initialize each entry with draw from Uniform min=-0.5,max=0.5                        
         """
         initializer = SparseLinear._getInitializer(initialization_type)
-        # Note the strange order of row_size and col_size.  This is because the block is transposed for the left multiplication.
-        # block = SparseLinear._getBlock(initializer, block_type, col_size, row_size)
-        block = SparseLinear._getBlock(initializer, block_type, row_size, col_size)
+        # Note the strange order of out_features and in_features.  This is because the block is transposed for the left multiplication.
+        # block = SparseLinear._getBlock(initializer, block_type, in_features, out_features)
+        block = SparseLinear._getBlock(initializer, block_type, out_features, in_features)
         A = SparseLinear(block, None, optimized_implementation=optimized_implementation,
                          bias=bias, device=device, dtype=dtype)
         return A

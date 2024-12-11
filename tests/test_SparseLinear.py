@@ -3,8 +3,8 @@ from iterativennsimple.SparseLinear import SparseLinear
 import torch
 
 def test_fromDescription():
-    row_sizes = [5, 7, 9]
-    col_sizes = [6, 8, 10]
+    out_features_sizes = [5, 7, 9]
+    in_features_sizes = [6, 8, 10]
     block_types = [[0, 'W', 'D'],
                    ['R=0.5', 'S=5', 'Row=3'],
                    ['S=2', 'R=0.9', 'Row=1']]
@@ -14,8 +14,8 @@ def test_fromDescription():
     trainable = [[0, 1, 0],
                  [1, 0, 1],
                  [1, 1, 1]]
-    model = MaskedLinear.from_description(row_sizes=row_sizes,
-                                          col_sizes=col_sizes,
+    model = MaskedLinear.from_description(out_features_sizes=out_features_sizes,
+                                          in_features_sizes=in_features_sizes,
                                           block_types=block_types,
                                           initialization_types=initialization_types,
                                           trainable=trainable)
@@ -28,8 +28,8 @@ def test_fromDescription_gradient():
     #
     #  iterativenn/notebooks/06-rcp-sparse-comparison.ipynb
     #
-    row_sizes = [5, 7, 9]
-    col_sizes = [6, 8, 10]
+    out_features_sizes = [5, 7, 9]
+    in_features_sizes = [6, 8, 10]
     block_types = [[0, 'W', 'D'],
                    ['R=0.5', 'D', 'Row=3'],
                    ['S=2', 'R=0.9', 'Row=1']]
@@ -39,8 +39,8 @@ def test_fromDescription_gradient():
     trainable = [[0, 1, 1],
                  [1, 0, 1],
                  [1, 1, 1]]
-    model = MaskedLinear.from_description(row_sizes=row_sizes,
-                                          col_sizes=col_sizes,
+    model = MaskedLinear.from_description(out_features_sizes=out_features_sizes,
+                                          in_features_sizes=in_features_sizes,
                                           block_types=block_types,
                                           initialization_types=initialization_types,
                                           trainable=trainable)
@@ -89,8 +89,8 @@ def test_singleBlock():
     S = SparseLinear.from_singleBlock(6, 3, 'Row=2', 'U')
 
 def test_fromDescription_exact():
-    row_sizes = [5, 7, 9]
-    col_sizes = [6, 8, 10]
+    out_features_sizes = [5, 7, 9]
+    in_features_sizes = [6, 8, 10]
     block_types = [[0, 'W', 'D'],
                    ['R=0.5', 'S=5', 'Row=3'],
                    ['S=2', 'R=0.9', 'Row=1']]
@@ -100,8 +100,8 @@ def test_fromDescription_exact():
     trainable = [[0, 'non-zero', 'non-zero'],
                  ['non-zero', 'non-zero', 'non-zero'],
                  ['non-zero', 'non-zero', 'non-zero']]
-    model = MaskedLinear.from_description(row_sizes=row_sizes,
-                                          col_sizes=col_sizes,
+    model = MaskedLinear.from_description(out_features_sizes=out_features_sizes,
+                                          in_features_sizes=in_features_sizes,
                                           block_types=block_types,
                                           initialization_types=initialization_types,
                                           trainable=trainable)
@@ -129,8 +129,8 @@ def test_from_coo():
     assert torch.all(diff_is_small)
 
 def test_to_coo():
-    row_sizes = [5, 7, 9]
-    col_sizes = [6, 8, 10]
+    out_features_sizes = [5, 7, 9]
+    in_features_sizes = [6, 8, 10]
     block_types = [[0, 'W', 'D'],
                    ['R=0.5', 'S=5', 'Row=3'],
                    ['S=2', 'R=0.9', 'Row=1']]
@@ -140,8 +140,8 @@ def test_to_coo():
     trainable = [[0, 'non-zero', 'non-zero'],
                  ['non-zero', 'non-zero', 'non-zero'],
                  ['non-zero', 'non-zero', 'non-zero']]
-    model = MaskedLinear.from_description(row_sizes=row_sizes,
-                                          col_sizes=col_sizes,
+    model = MaskedLinear.from_description(out_features_sizes=out_features_sizes,
+                                          in_features_sizes=in_features_sizes,
                                           block_types=block_types,
                                           initialization_types=initialization_types,
                                           trainable=trainable,

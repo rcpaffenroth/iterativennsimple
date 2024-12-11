@@ -117,8 +117,8 @@ def test_fromMLP():
 
 def test_fromDescription():
     tml = GetMaskedLinear()
-    row_sizes = [5, 7, 9]
-    col_sizes = [6, 8, 10]
+    out_features_sizes = [5, 7, 9]
+    in_features_sizes = [6, 8, 10]
     block_types = [[0, 'W', 'D'],
                    ['R=0.5', 'S=5', 'Row=3'],
                    ['S=2', 'R=0.9', 'Row=1']]
@@ -128,8 +128,8 @@ def test_fromDescription():
     trainable = [[0, 1, 0],
                  [1, 0, 1],
                  [1, 1, 1]]
-    model = tml.m.from_description(row_sizes=row_sizes,
-                                   col_sizes=col_sizes,
+    model = tml.m.from_description(out_features_sizes=out_features_sizes,
+                                   in_features_sizes=in_features_sizes,
                                    block_types=block_types,
                                    initialization_types=initialization_types,
                                    trainable=trainable)
