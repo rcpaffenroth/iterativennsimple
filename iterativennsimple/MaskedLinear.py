@@ -177,7 +177,7 @@ class MaskedLinear(torch.nn.Module):
         return initialize
 
     @staticmethod
-    def from_coo(coo, check_mask: bool = False, bias: bool = True, device=None, dtype=None) -> Any:
+    def from_coo(coo, check_mask: bool = False, bias: bool = False, device=None, dtype=None) -> Any:
         """
         Create a MaskedLinear from a sparse COO matrix.
 
@@ -433,7 +433,7 @@ class MaskedLinear(torch.nn.Module):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         start_time = time.perf_counter()
         weight = self.weight_0 + self.U * self.mask
-        # Note, this does :math:`y = xA^T + b`.  Beware the transpose.
+        # NOTE: this does :math:`y = xA^T + b`.  Beware the transpose.
         result = torch.nn.functional.linear(input, weight, self.bias)
         logger.debug(f'forward time {time.perf_counter()-start_time:e}')
         return result

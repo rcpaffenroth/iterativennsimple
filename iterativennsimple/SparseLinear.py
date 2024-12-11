@@ -20,14 +20,15 @@ class SparseLinear(torch.nn.Module):
     can be either:
 
     0 and not trainable
+    0 and trainable
     arbitrary and not trainable
     arbitrary and trainable
 
-    Only the later two cost computation, while the first is "free".
+    Only the later three cost computation, while the first is "free".
 
     The weight is defined as
 
-    :math:`A = S_T*S_M + S_N`
+    :math:`A = S_T + S_N`
 
     Where S_T is sparse and trainable, and S_N is sparse and not
     trainable.
@@ -78,7 +79,6 @@ class SparseLinear(torch.nn.Module):
                  sparse_trainable: torch.Tensor, 
                  sparse_not_trainable: torch.tensor = None, 
                  optimized_implementation: bool = True,
-                 transpose: bool = True,
                  bias: bool = True,
                  device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
@@ -95,8 +95,6 @@ class SparseLinear(torch.nn.Module):
             logger.warning("torch_sparse is not installed, falling back to slow implementation")
             self.optimized_implementation = False
             
-        self.transpose=transpose
-
         # Unpack the standard pytorch sparse matrix
         sparse_trainable = sparse_trainable.coalesce()
         self.sparse_trainable_values = torch.nn.parameter.Parameter(torch.tensor(sparse_trainable.values(), **factory_kwargs), 
@@ -189,22 +187,31 @@ class SparseLinear(torch.nn.Module):
             assert False, "Unknown block type"
         return torch.sparse_coo_tensor(torch.stack([torch.tensor(u), torch.tensor(v)]), torch.tensor(vals), (row_size, col_size))
 
+    def to_coo(self):
+        """Returns a COO tensor representation of the sparse matrix.
+
+        Returns:
+            Tensor: the COO tensor representation of the sparse matrix.
+        """
+        assert self.sparse_not_trainable is None, "Not implemented when sparse_not_trainable is not None"
+        return torch.sparse_coo_tensor(self.sparse_trainable_indices, self.sparse_trainable_values, (self.out_features, self.in_features))
+
     @staticmethod
     def from_coo(coo,
-                 optimized_implementation: bool = True,  transpose: bool = True,
-                 bias: bool = True, device=None, dtype=None) -> Any:
+                 optimized_implementation: bool = True,
+                 bias: bool = False, device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a COO tensor.
         Args:
             coo: A COO tensor
         """
         A = SparseLinear(coo, None, optimized_implementation=optimized_implementation, 
-                         transpose=transpose, bias=bias, device=device, dtype=dtype)
+                         bias=bias, device=device, dtype=dtype)
         return A
 
     @staticmethod
-    def from_singleBlock(row_size, col_size, block_type, initialization_type, 
-                         optimized_implementation: bool = True,  transpose: bool = False,
+    def from_singleBlock(row_size, col_size, block_type, initialization_type,
+                         optimized_implementation: bool = True,
                          bias: bool = True, device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a single block description.
@@ -242,14 +249,13 @@ class SparseLinear(torch.nn.Module):
         # Note the strange order of row_size and col_size.  This is because the block is transposed for the left multiplication.
         # block = SparseLinear._getBlock(initializer, block_type, col_size, row_size)
         block = SparseLinear._getBlock(initializer, block_type, row_size, col_size)
-        A = SparseLinear(block, None, optimized_implementation=optimized_implementation, 
-                         transpose=transpose, bias=bias, device=device, dtype=dtype)
+        A = SparseLinear(block, None, optimized_implementation=optimized_implementation,
+                         bias=bias, device=device, dtype=dtype)
         return A
         
     @staticmethod
     def from_MaskedLinear(M: MaskedLinear, 
-                          optimized_implementation: bool = True, 
-                          transpose: bool = True, 
+                          optimized_implementation: bool = True,
                           device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a masked matrix.  This is a simpler and faster version of from_MaskedLinearExact.
@@ -265,13 +271,11 @@ class SparseLinear(torch.nn.Module):
             if not M.bias is None:
                 A = SparseLinear(sparse_trainable, None, 
                                  optimized_implementation=optimized_implementation, 
-                                 transpose=transpose,
                                  bias=True, device=device, dtype=dtype)
                 A.bias[:] = M.bias[:] 
             else:
                 A = SparseLinear(sparse_trainable, None, 
                                  optimized_implementation=optimized_implementation, 
-                                 transpose=transpose,
                                  bias=False, device=device, dtype=dtype)
         return A
 
@@ -280,7 +284,6 @@ class SparseLinear(torch.nn.Module):
     def from_MaskedLinearExact(M: MaskedLinear, 
                                keep_trainable_zeros: bool = True, 
                                optimized_implementation: bool = True, 
-                               transpose: bool = True, 
                                device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a masked matrix.  This should be, mathematically, the same linear operator
@@ -335,13 +338,11 @@ class SparseLinear(torch.nn.Module):
             if not M.bias is None:
                 A = SparseLinear(sparse_trainable, sparse_not_trainable, 
                                  optimized_implementation=optimized_implementation, 
-                                 transpose=transpose,
                                  bias=True, device=device, dtype=dtype)
                 A.bias[:] = M.bias[:] 
             else:
                 A = SparseLinear(sparse_trainable, sparse_not_trainable, 
                                  optimized_implementation=optimized_implementation,
-                                 transpose=transpose, 
                                  bias=False, device=device, dtype=dtype)
 
         return A
@@ -352,22 +353,28 @@ class SparseLinear(torch.nn.Module):
             # FIXME: This is a hack to get around the fact that the indices are not on the same device as the input
             # I am not sure this is the fastest way to do this
             tmp_indices = self.sparse_trainable_indices.to(input.device)
-            # Note, torch.sparse mm does provide gradients for sparse
-            # This is the fast way to do it, but the library is a little funky.  I.e.
-            # it does not seem to always compile.  So, I'm using the slow way for now.
-            y = torch_sparse.spmm(tmp_indices, 
-                                  self.sparse_trainable_values, 
-                                  self.out_features, 
-                                  self.in_features, 
-                                  input.T)
+            # NOTE: torch.sparse mm does provide gradients for sparse
+            # This is the fast way to do it, but the library is a little funky.  I.e., I am not sure
+            # how well it is maintained, though it seems fine as of 12/2024.
+            y_before_T = torch_sparse.spmm(tmp_indices,
+                                           self.sparse_trainable_values,
+                                           self.out_features,
+                                           self.in_features,
+                                           # NOTE: The operation we want is y = xA^T, to be consistent with
+                                           # https://pytorch.org/docs/stable/generated/torch.nn.functional.linear.html
+                                           # However, the library does y = Ax, so we need to transpose the input
+                                           input.T)
         else:
             # This is the slow way to do it
-            # Note, the strange order of the arguments 
-            # to zip is because of the transpose.        
-            y = torch.zeros(self.out_features, input.shape[0], device=input.device, dtype=input.dtype)
-            for (i,j), v in zip(self.sparse_trainable_indices.T, 
+            # NOTE: the strange order of the arguments
+            # to zip is because of the transpose.
+            y_before_T = torch.zeros(self.out_features, input.shape[0], device=input.device, dtype=input.dtype)
+            for (i,j), v in zip(self.sparse_trainable_indices.T,
                                 self.sparse_trainable_values):
-                y[i,:] += v*(input.T)[j,:] 
+                # NOTE: The operation we want is y = xA^T, to be consistent with
+                # https://pytorch.org/docs/stable/generated/torch.nn.functional.linear.html
+                # However, the library does y = Ax, so we need to transpose the input
+                y_before_T[i,:] += v*(input.T)[j,:]
         logger.debug(f'sparse mm {time.perf_counter()-start_time:e}')
 
         start_time = time.perf_counter()
@@ -375,19 +382,25 @@ class SparseLinear(torch.nn.Module):
             # FIXME: This is a hack to get around the fact that self.sparse_not_trainable is
             # not on the same device as the input. I am not sure this is the fastest way to do this
             tmp_sparse_not_trainable = self.sparse_not_trainable.to(input.device)
-            # Note, torch.mm does *not* provide gradients for sparse
-            y += torch.mm(tmp_sparse_not_trainable, input.T)
+            # NOTE: torch.mm does *not* provide gradients for sparse
+            # NOTE: The operation we want is y = xA^T, to be consistent with
+            # https://pytorch.org/docs/stable/generated/torch.nn.functional.linear.html
+            # However, the library does y = Ax, so we need to transpose the input
+            y_before_T += torch.mm(tmp_sparse_not_trainable, input.T)
         logger.debug(f'sparse not trainable {time.perf_counter()-start_time:e}')
 
+        # NOTE: The operation we want is y = xA^T, to be consistent with
+        # https://pytorch.org/docs/stable/generated/torch.nn.functional.linear.html
+        # but what we have is y_before_T = Ax^T, so we need to transpose it to get
+        # y = xA^T = (Ax^T)^T = y_before_T.T
+        y = y_before_T.T
+
         start_time = time.perf_counter()
-        if not self.bias is None:
-            y = y.T + self.bias
         # Note, this does :math:`y = xA^T + b`.  Beware the transpose.
+        if not self.bias is None:
+            y = y + self.bias
         logger.debug(f'bias {time.perf_counter()-start_time:e}')
-        if self.transpose:
-            return y.T
-        else:
-            return y
+        return y
 
     def extra_repr(self) -> str:
         return 'in_features={}, out_features={}, bias={}'.format(
