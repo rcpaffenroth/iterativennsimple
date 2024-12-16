@@ -25,13 +25,15 @@ jupyterlab = "4.3.*"
 wandb = "0.19.*"
 # Command line parsing
 click = "8.1.*"
+# For reading data from s3
+boto3 = "1.35.*"
 
 [tool.poetry.group.dev]
 optional = true
 
 [tool.poetry.group.dev.dependencies]
-pytest = "7.4.*"
-pylint = "3.0.*"
+pytest = "8.3.*"
+pylint = "3.2.*"
 nbmake = "1.5.*"
 jupytext = "1.16.*"
 
