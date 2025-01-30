@@ -29,13 +29,6 @@ Open a terminal and run the following command to install pytorch, etc.
 scripts/post-create.sh
 ```
 
-You will only need to this once per rebuild.  Then, you can click on
-
-```
-notebooks/1-rcp-generate-data.ipynb
-```
-to get started.
-
 ## Tips and tricks
 
 Don't forget to set your Python environment.  The one used here is

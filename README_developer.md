@@ -32,7 +32,7 @@ poetry config virtualenvs.in-project true --local
 ```
 
 ## Generating test data
-To generate test data you can run the following command:
+To generate a local copy of the test data you can run the following command:
 
 ```bash
 cd scripts
