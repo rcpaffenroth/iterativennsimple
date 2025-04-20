@@ -14,7 +14,7 @@ torchvision = {version = "0.20.*", source = "pytorch"}
 numpy = "2.1.*"
 # For data
 pandas = "2.2.*"
-pyarrow = "18.1.*"
+pyarrow = "17.*.*"
 # For the notebooks and vscode
 matplotlib = "3.9.*"
 plotly = "5.24.*"
