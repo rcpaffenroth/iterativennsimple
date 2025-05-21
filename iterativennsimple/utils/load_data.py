@@ -26,7 +26,7 @@ def data_names(local=False) -> list:
 
 def load_data(name: str, local=False) -> dict:
     """Load in the dataset with the given name.  This functions loads in a variety of datasets created by the
-    `generate-data` notebook.
+    `scripts/generate-data.py` script.
 
     Args:
         name (str): the name of the dataset
