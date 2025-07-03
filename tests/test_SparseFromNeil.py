@@ -6,6 +6,7 @@ from iterativennsimple.Sequential2D import Sequential2D, Identity
 from iterativennsimple.Sequential1D import Sequential1D
 
 from iterativennsimple.SparseLinear import SparseLinear
+from generatedata.load_data import load_data
 
 import os
 import pathlib
@@ -17,18 +18,12 @@ def test_for_Neil(long_test=False):
     def df_to_tensor(df):
         return torch.tensor(df.values, dtype=torch.float32)
 
-    # get the path of the current file
-    dir_path = pathlib.Path(iterativennsimple.__path__[0]) / '..' / 'data' / 'test'
-
-    # Read the start data
-    z_start = pd.read_parquet(dir_path / 'MNIST_small_start.parquet')
-    # Read the target data
-    z_target = pd.read_parquet(dir_path / 'MNIST_small_target.parquet')
+    z = load_data('MNIST')
 
     # Data preprocessing
 
-    z_start_tensor = df_to_tensor(z_start)
-    z_target_tensor = df_to_tensor(z_target)
+    z_start_tensor = df_to_tensor(z['start'])
+    z_target_tensor = df_to_tensor(z['target'])
 
     # Only use the given number of samples
     if long_test:

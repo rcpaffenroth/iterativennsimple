@@ -14,7 +14,7 @@ torchvision = {version = "0.20.*", source = "pytorch"}
 numpy = "2.1.*"
 # For data
 pandas = "2.2.*"
-pyarrow = "18.1.*"
+pyarrow = "17.*.*"
 # For the notebooks and vscode
 matplotlib = "3.9.*"
 plotly = "5.24.*"
@@ -25,13 +25,15 @@ jupyterlab = "4.3.*"
 wandb = "0.19.*"
 # Command line parsing
 click = "8.1.*"
+# the generatedata from a github repo
+generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", branch = "main" }
 
 [tool.poetry.group.dev]
 optional = true
 
 [tool.poetry.group.dev.dependencies]
-pytest = "7.4.*"
-pylint = "3.0.*"
+pytest = "8.3.*"
+pylint = "3.2.*"
 nbmake = "1.5.*"
 jupytext = "1.16.*"
 
