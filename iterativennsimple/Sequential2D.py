@@ -82,24 +82,29 @@ class Sequential2D(torch.nn.Module):
         
     def forward_list(self, X_in):
         """
-        A forward method that takes a list of inputs and applies the blocks in sequence.
-        
+        A forward method that takes a list of inputs and applies the blocks in sequence.  It implements the
+        following optimization. If X_in has a None entry, then we assume that output of any
+        block that takes in that input is also None.  We also assume that None+Vector is just the Vector.
+
         Args:
             X_in (list): A list of tensors, where each tensor has shape (batch_size, in_features_list[i]).
         
         Returns:
             X_out (list): A list of tensors, where each tensor has shape (batch_size, out_features_list[j]).
         """
-        assert False, "The forward_list method is not implemented. Use forward_vector instead."
-        assert len(X_in) == len(self.in_features_list), f'The input has the wrong number of features. {len(X_in), self.in_features_list }'
+        assert len(X_in) == len(self.in_features_list), f'The input has the wrong number of features. {len(X_in), len(self.in_features_list)}'
 
-        X_out = [torch.zeros((X_in[0].shape[0], self.out_features_list[j]), device=X_in[0].device) for j in range(len(self.out_features_list))]
+        X_out = [None] * len(self.out_features_list)
 
         for i in range(len(self.in_features_list)):
             for j in range(len(self.out_features_list)):
-                if str((i, j)) in self.blocks.keys() and X_in[i] is not None
-                    tmp_block = self.blocks[str((i, j))].forward(X_in[i])
-                    X_out[j] += tmp_block
+                if str((i, j)) in self.blocks.keys():
+                    if not X_in[i] is None:
+                        tmp_block = self.blocks[str((i, j))].forward(X_in[i])
+                        if X_out[j] is None:
+                            X_out[j] = tmp_block
+                        else:
+                            X_out[j] += tmp_block
         return X_out
 
     def forward_vector(self, X_in):
