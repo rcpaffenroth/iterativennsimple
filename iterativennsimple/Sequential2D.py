@@ -66,6 +66,43 @@ class Sequential2D(torch.nn.Module):
                         self.blocks[str((i, j))] = blocks[i][j]
                     
     def forward(self, X_in):
+        """
+        A forward method that takes an input tensor and applies the blocks in sequence.
+        
+        Args:
+            X_in (torch.Tensor): A tensor of shape (batch_size, in_features).
+        
+        Returns:
+            X_out (torch.Tensor): A tensor of shape (batch_size, out_features).
+        """
+        if isinstance(X_in, list):
+            return self.forward_list(X_in)
+        else:
+            return self.forward_vector(X_in)
+        
+    def forward_list(self, X_in):
+        """
+        A forward method that takes a list of inputs and applies the blocks in sequence.
+        
+        Args:
+            X_in (list): A list of tensors, where each tensor has shape (batch_size, in_features_list[i]).
+        
+        Returns:
+            X_out (list): A list of tensors, where each tensor has shape (batch_size, out_features_list[j]).
+        """
+        assert False, "The forward_list method is not implemented. Use forward_vector instead."
+        assert len(X_in) == len(self.in_features_list), f'The input has the wrong number of features. {len(X_in), self.in_features_list }'
+
+        X_out = [torch.zeros((X_in[0].shape[0], self.out_features_list[j]), device=X_in[0].device) for j in range(len(self.out_features_list))]
+
+        for i in range(len(self.in_features_list)):
+            for j in range(len(self.out_features_list)):
+                if str((i, j)) in self.blocks.keys() and X_in[i] is not None
+                    tmp_block = self.blocks[str((i, j))].forward(X_in[i])
+                    X_out[j] += tmp_block
+        return X_out
+
+    def forward_vector(self, X_in):
         assert X_in.shape[1] == self.in_features, f'The input has the wrong number of features. {X_in.shape, self.in_features }'
         X_out = torch.zeros((X_in.shape[0], self.out_features), device=X_in.device)
 

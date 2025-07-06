@@ -54,9 +54,9 @@ The key insight: by sharing weights W and bias b across all layers, we create a 
 5. **`5-rcp-pulled-apart.ipynb`**: Detailed analysis of network components
 
 #### Advanced Applications (`notebooks/advanced/`)
-- **`2b-rcp-iterated-model-train-MNIST.ipynb`**: MNIST classification with iterative networks
-- **`3-rcp-iterated-model-fish.ipynb`**: Complex pattern recognition tasks
-- **`6-rcp-computational-performance.ipynb`**: Performance analysis and optimization
+- **`1-rcp-iterated-model-train-MNIST.ipynb`**: MNIST classification with iterative networks
+- **`2-rcp-iterated-model-fish.ipynb`**: Complex pattern recognition tasks
+- **`3-rcp-computational-performance.ipynb`**: Performance analysis and optimization
 
 #### Presentations (`notebooks/presentations/`)
 - **`dynamical_systems.ipynb`**: Interactive exploration of dynamical systems theory, including:
