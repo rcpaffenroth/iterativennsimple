@@ -3,7 +3,7 @@ import torch
 from iterativennsimple.MaskedLinear import MaskedLinear
 from iterativennsimple.SparseLinear import SparseLinear
 
-class Identity(torch.nn.Identity):
+class Identity(torch.nn.Module):
     """
     A torch.nn.Identity module that also has in_features and out_features attributes.
     """
@@ -13,6 +13,19 @@ class Identity(torch.nn.Identity):
         assert out_features is not None, "out_features must be specified"
         self.in_features = in_features
         self.out_features = out_features
+
+    def forward(self, X_in):
+        """
+        A forward method that just returns the input.
+        
+        Args:
+            X_in (torch.Tensor): A tensor of shape (batch_size, in_features).
+        
+        Returns:
+            X_in (torch.Tensor): A tensor of shape (batch_size, out_features).
+        """
+        assert X_in.shape[1] == self.in_features, f'The input has the wrong number of features. {X_in.shape, self.in_features}'
+        return X_in
 
 class Sequential2D(torch.nn.Module):
     """
