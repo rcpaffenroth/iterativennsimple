@@ -3,7 +3,7 @@ import torch
 from iterativennsimple.MaskedLinear import MaskedLinear
 from iterativennsimple.SparseLinear import SparseLinear
 
-class Identity(torch.nn.Identity):
+class Identity(torch.nn.Module):
     """
     A torch.nn.Identity module that also has in_features and out_features attributes.
     """
@@ -13,6 +13,19 @@ class Identity(torch.nn.Identity):
         assert out_features is not None, "out_features must be specified"
         self.in_features = in_features
         self.out_features = out_features
+
+    def forward(self, X_in):
+        """
+        A forward method that just returns the input.
+        
+        Args:
+            X_in (torch.Tensor): A tensor of shape (batch_size, in_features).
+        
+        Returns:
+            X_in (torch.Tensor): A tensor of shape (batch_size, out_features).
+        """
+        assert X_in.shape[1] == self.in_features, f'The input has the wrong number of features. {X_in.shape, self.in_features}'
+        return X_in
 
 class Sequential2D(torch.nn.Module):
     """
@@ -66,6 +79,48 @@ class Sequential2D(torch.nn.Module):
                         self.blocks[str((i, j))] = blocks[i][j]
                     
     def forward(self, X_in):
+        """
+        A forward method that takes an input tensor and applies the blocks in sequence.
+        
+        Args:
+            X_in (torch.Tensor): A tensor of shape (batch_size, in_features).
+        
+        Returns:
+            X_out (torch.Tensor): A tensor of shape (batch_size, out_features).
+        """
+        if isinstance(X_in, list):
+            return self.forward_list(X_in)
+        else:
+            return self.forward_vector(X_in)
+        
+    def forward_list(self, X_in):
+        """
+        A forward method that takes a list of inputs and applies the blocks in sequence.  It implements the
+        following optimization. If X_in has a None entry, then we assume that output of any
+        block that takes in that input is also None.  We also assume that None+Vector is just the Vector.
+
+        Args:
+            X_in (list): A list of tensors, where each tensor has shape (batch_size, in_features_list[i]).
+        
+        Returns:
+            X_out (list): A list of tensors, where each tensor has shape (batch_size, out_features_list[j]).
+        """
+        assert len(X_in) == len(self.in_features_list), f'The input has the wrong number of features. {len(X_in), len(self.in_features_list)}'
+
+        X_out = [None] * len(self.out_features_list)
+
+        for i in range(len(self.in_features_list)):
+            for j in range(len(self.out_features_list)):
+                if str((i, j)) in self.blocks.keys():
+                    if not X_in[i] is None:
+                        tmp_block = self.blocks[str((i, j))].forward(X_in[i])
+                        if X_out[j] is None:
+                            X_out[j] = tmp_block
+                        else:
+                            X_out[j] += tmp_block
+        return X_out
+
+    def forward_vector(self, X_in):
         assert X_in.shape[1] == self.in_features, f'The input has the wrong number of features. {X_in.shape, self.in_features }'
         X_out = torch.zeros((X_in.shape[0], self.out_features), device=X_in.device)
 

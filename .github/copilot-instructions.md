@@ -17,12 +17,19 @@
 
 ## Coding Guidelines
 
+### General Considerations
+- Often this code will be handed off to students or colleagues, so clarity and maintainability are key
+- Strive for simple and clear solutions
+- The code is research-focused, so it should be easy to adapt for different experiments, and should be well-documented
+- Do you not additional functionalities that are not needed for the current research focus
+
 ### Python Development
 - Use Poetry for dependency management (pyproject.toml)
 - Use type hints for better code clarity
 - Structure code for modularity and reusability
 - Follow PyTorch best practices for efficient tensor operations 
 - Use dataclasses for structured data representations
+- Prefer click over argparse for command-line interfaces in Python scripts
 
 ### Configuration Management
 - Follow YAML best practices for configuration files
@@ -49,10 +56,10 @@
 - Include troubleshooting guides
 
 ## Testing Patterns
-- Write unit tests for core functionality
-- Include integration tests for distributed components
-- Test configuration validation
-- Implement specific tests for dynamical system implementations
+- Write unit tests for core functionality without class wrappers 
+- Use function-based tests with pytest fixtures for setup
+- Test configuration Validation
+- Keep the tests simple and focused on specific functionality
 
 ## User-Specific Considerations
 - **Mathematical Rigor**: Code suggestions should maintain mathematical precision
@@ -65,13 +72,8 @@ When suggesting code, prioritize:
 1. Mathematical correctness and numerical stability
 2. Performance optimization for ML/DL workloads
 3. Modern package recommendations with brief explanations
-4. Reliability and error handling for distributed systems
-5. System administration best practices for Linux environments
-6. Clear, concise documentation suitable for academic use
+4. System administration best practices for Linux environments
+5. Clear, concise documentation suitable for academic use
 
 # Repository-specific guidelines
 
-## Repository concept
-
-This repository implements a framework for studying dynamical systems as models for 
-machine learning problems. 

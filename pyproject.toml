@@ -25,8 +25,8 @@ jupyterlab = "4.3.*"
 wandb = "0.19.*"
 # Command line parsing
 click = "8.1.*"
-# For reading data from s3
-boto3 = "1.35.*"
+# the generatedata from a github repo
+generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", branch = "main" }
 
 [tool.poetry.group.dev]
 optional = true
