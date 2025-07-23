@@ -14,11 +14,11 @@ import click
 
 # The following are all of the functions that we have created in the iterativennsimple package
 # Turn a dataframe into a tensor
-from iterativennsimple.utils.df_to_tensor import df_to_tensor
+from generatedata.df_to_tensor import df_to_tensor
 # A class to help with returning pairs of start and target data
-from iterativennsimple.utils.StartTargetData import StartTargetData
+from generatedata.StartTargetData import StartTargetData
 # Load the datasets that come with iterativennsimple
-from iterativennsimple.utils.load_data import load_data
+from generatedata.load_data import load_data
 
 # Setup logging.  This is better than using print statements.
 import logging
