@@ -1,37 +1,0 @@
-Input Notebook:  Sequential-vs-Sequential2D.ipynb
-Output Notebook: tmp_output.ipynb
-Executing:   0%|          | 0/12 [00:00<?, ?cell/s]Executing notebook with kernel: python3
-Executing:   8%|▊         | 1/12 [00:04<00:44,  4.04s/cell]Executing:  33%|███▎      | 4/12 [00:10<00:19,  2.41s/cell]Executing:  33%|███▎      | 4/12 [00:10<00:21,  2.66s/cell]
-Traceback (most recent call last):
-  File "/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv/bin/papermill", line 8, in <module>
-    sys.exit(papermill())
-  File "/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv/lib/python3.10/site-packages/click/core.py", line 1161, in __call__
-    return self.main(*args, **kwargs)
-  File "/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv/lib/python3.10/site-packages/click/core.py", line 1082, in main
-    rv = self.invoke(ctx)
-  File "/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv/lib/python3.10/site-packages/click/core.py", line 1443, in invoke
-    return ctx.invoke(self.callback, **ctx.params)
-  File "/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv/lib/python3.10/site-packages/click/core.py", line 788, in invoke
-    return __callback(*args, **kwargs)
-  File "/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv/lib/python3.10/site-packages/click/decorators.py", line 33, in new_func
-    return f(get_current_context(), *args, **kwargs)
-  File "/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv/lib/python3.10/site-packages/papermill/cli.py", line 235, in papermill
-    execute_notebook(
-  File "/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv/lib/python3.10/site-packages/papermill/execute.py", line 131, in execute_notebook
-    raise_for_execution_errors(nb, output_path)
-  File "/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv/lib/python3.10/site-packages/papermill/execute.py", line 251, in raise_for_execution_errors
-    raise error
-papermill.exceptions.PapermillExecutionError: 
----------------------------------------------------------------------------
-Exception encountered at "In [2]":
----------------------------------------------------------------------------
-ModuleNotFoundError                       Traceback (most recent call last)
-Cell In[2], line 5
-      3 import torch.nn as nn
-      4 import numpy as np
-----> 5 from iterativennsimple.Sequential2D import Sequential2D
-      6 from iterativennsimple.Sequential1D import Sequential1D
-      8 # Set random seeds for reproducibility
-
-ModuleNotFoundError: No module named 'iterativennsimple'
-

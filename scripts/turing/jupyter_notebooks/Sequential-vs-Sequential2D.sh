@@ -10,6 +10,7 @@
 VENVPATH=/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv
 
 source $VENVPATH/bin/activate
+which papermill
 # Run the script with papermill
 papermill Sequential-vs-Sequential2D.ipynb tmp_output.ipynb
 
