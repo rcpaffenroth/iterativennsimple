@@ -43,20 +43,17 @@ The key insight: by sharing weights W and bias b across all layers, we create a 
 - **`MaskedLinear.py`**: Linear layers with learnable masking for sparse connectivity
 - **`SparseLinear.py`**: Efficient sparse linear transformations
 - **`bmatrix.py`**: Utilities for block matrix operations
+- **`utils/`**: Utility modules for data handling and processing
 
 ### Notebooks (`notebooks/`)
 
 #### Core Tutorial Sequence
 1. **`1-rcp-visualize-data.ipynb`**: Data visualization fundamentals
-2. **`2-rcp-seqential-2D-problems.ipynb`**: Introduction to 2D dynamical systems
-3. **`3-rcp-iterated-2D-problems.ipynb`**: Iterative approaches to 2D problems
-4. **`4-rcp-MLP.ipynb`**: Comparison between standard MLPs and iterative networks
-5. **`5-rcp-pulled-apart.ipynb`**: Detailed analysis of network components
-
-#### Advanced Applications (`notebooks/advanced/`)
-- **`1-rcp-iterated-model-train-MNIST.ipynb`**: MNIST classification with iterative networks
-- **`2-rcp-iterated-model-fish.ipynb`**: Complex pattern recognition tasks
-- **`3-rcp-computational-performance.ipynb`**: Performance analysis and optimization
+2. **`2-rcp-seqential-simple-problems.ipynb`**: Introduction to simple sequential problems
+3. **`3-rcp-iterated-simple-problems.ipynb`**: Iterative approaches to simple problems
+4. **`4-rcp-pulled-apart.ipynb`**: Detailed analysis of network components
+5. **`5-rcp-MLP.ipynb`**: Comparison between standard MLPs and iterative networks
+6. **`6-rcp-Sequential-vs-Sequential2D.ipynb`**: Performance comparison between Sequential1D and Sequential2D implementations
 
 #### Presentations (`notebooks/presentations/`)
 - **`dynamical_systems.ipynb`**: Interactive exploration of dynamical systems theory, including:
@@ -66,8 +63,8 @@ The key insight: by sharing weights W and bias b across all layers, we create a 
 
 ### Utility Scripts (`scripts/`)
 - **`post-create.sh`**: Environment setup script
-- **`install-torch-sparse.sh`**: Sparse tensor library installation
-- **`wandb/`**: Weights & Biases integration for experiment tracking
+- **`wandb/`**: Weights & Biases integration for experiment tracking with demo scripts and configuration
+- **`turing/`**: Instructions and examples for running Jupyter notebooks and Python scripts on Turing clusters
 
 ### Testing (`tests/`)
 Comprehensive test suite ensuring reproducibility of all notebook results.
@@ -105,13 +102,16 @@ source venv/bin/activate
 ### 3. Start with Core Notebooks
 Begin with the numbered sequence in `notebooks/`:
 1. **Data Visualization**: `1-rcp-visualize-data.ipynb`
-2. **2D Systems**: `2-rcp-seqential-2D-problems.ipynb` 
-3. **Iterative Approaches**: `3-rcp-iterated-2D-problems.ipynb`
+2. **Simple Sequential Problems**: `2-rcp-seqential-simple-problems.ipynb` 
+3. **Iterative Approaches**: `3-rcp-iterated-simple-problems.ipynb`
+4. **Component Analysis**: `4-rcp-pulled-apart.ipynb`
+5. **MLP Comparison**: `5-rcp-MLP.ipynb`
+6. **Performance Comparison**: `6-rcp-Sequential-vs-Sequential2D.ipynb`
 
 ### 4. Explore Advanced Topics
 - Try the **Dynamical Systems** presentation for interactive mathematical exploration
-- Experiment with **MNIST classification** using iterative networks
-- Analyze **computational performance** characteristics
+- Experiment with network architectures using iterative approaches
+- Analyze **computational performance** characteristics between different implementations
 
 ## Development Philosophy
 
