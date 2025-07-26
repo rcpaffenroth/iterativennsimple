@@ -15,7 +15,7 @@ Some scripts for running Python on Turing. There are examples for Pytorch and Sc
 
 Some scripts for using Turing more generally. For example, for getting an interactive node.
 
-# Introduction to Turing (as of 5/17/2021)
+# Introduction to Turing (as of 7/26/2025)
 
 ## Getting started
 

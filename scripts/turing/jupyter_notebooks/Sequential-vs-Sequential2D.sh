@@ -6,11 +6,10 @@
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="L40S"
 
-# Of course, you need to change this to be the script you want to run.,
+# Of course, you need to change this to be directory of your virtual environment.
 VENVPATH=/home/rcpaffenroth/projects/2_research/iterativennsimple/.venv
 
 source $VENVPATH/bin/activate
-which papermill
 # Run the script with papermill
 papermill Sequential-vs-Sequential2D.ipynb tmp_output.ipynb
 
