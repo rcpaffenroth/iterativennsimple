@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "iterativennsimple"
-version = "0.2.0"
+version = "0.3.0"
 description = "A simple version of iterativenn to get people started"
 authors = ["Randy Paffenroth <rcpaffenroth@wpi.edu>"]
 license = "BSD 3-Clause License"
