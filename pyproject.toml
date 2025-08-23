@@ -26,7 +26,7 @@ wandb = "0.19.*"
 # Command line parsing
 click = "8.1.*"
 # the generatedata from a github repo
-generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", branch = "main" }
+generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", tag = "v0.3.0" }
 
 [tool.poetry.group.dev]
 optional = true
