@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "iterativennsimple"
-version = "0.1.0"
+version = "0.2.0"
 description = "A simple version of iterativenn to get people started"
 authors = ["Randy Paffenroth <rcpaffenroth@wpi.edu>"]
 license = "BSD 3-Clause License"
@@ -30,7 +30,7 @@ click = "8.1.*"
 # Running jupyter notebooks in batch mode
 papermill = "2.6.0"
 # the generatedata from a github repo
-generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", branch = "main" }
+generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", tag = "v0.3.0" }
 
 [tool.poetry.group.dev]
 optional = true
