@@ -1,0 +1,31 @@
+Create a new notebook called notebooks/advanced/6-rcp-Sequential2D-training-spectra.ipynb. 
+The problem of interest is given a vector x train the Sequential2D to predict the length of the input vector. 
+This is intended just be a simple problem to look at the singular values of the weight matrices as the model trains.
+
+First train a Sequential2D model of the form:
+
+F1 = Sequential1D(nn.Sequential(MaskedLinear(...)), in_features=input_size, out_features=hidden_size)
+F2 = Sequential1D(nn.Sequential(nn.ReLU(), MaskedLinear(...)), in_features=hidden_size, out_features=hidden_size)
+F3 = Sequential1D(nn.Sequential(nn.ReLU(), MaskedLinear(...)), in_features=hidden_size, out_features=output_size)
+
+blocks = [[None, F1, None, None],
+          [None, None, F2, None],
+          [None, None, None, F3],
+          [None, None, None, None]]
+
+Second, train a Sequential2D model of the form:
+
+Gij = Sequential1D(nn.Sequential(MaskedLinear(...)), in_features=input_size, out_features=hidden_size)
+
+blocks = [[None, G01, G02, G03],
+          [None, G11, G12, G13],
+          [None, G21, G22, G23],
+          [None, G31, G32, G33]]
+
+Provide visualizations of the singular value spectra of the various weight matrices in each block 
+as training progresses for both models.
+
+Use the notebook notebooks/6-rcp-Sequential-vs-Sequential2D.ipynb and as inspiration.
+
+Keep the implementation as simple as possible and maximize the understandability of the code.  I will want to edit this code 
+later to try different problems and architectures.
