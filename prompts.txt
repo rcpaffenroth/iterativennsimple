@@ -1,31 +1,120 @@
-Create a new notebook called notebooks/advanced/6-rcp-Sequential2D-training-spectra.ipynb. 
-The problem of interest is given a vector x train the Sequential2D to predict the length of the input vector. 
-This is intended just be a simple problem to look at the singular values of the weight matrices as the model trains.
+## Objective
+Create notebook: `notebooks/advanced/6-rcp-Sequential2D-training-spectra.ipynb`
 
-First train a Sequential2D model of the form:
+## Problem Description
+Train two Sequential2D models on a simple regression task: predict the Euclidean norm (L2 length) of an input vector x.
+The goal is to visualize how the singular value spectra of the weight matrices in each block evolve during training.
 
-F1 = Sequential1D(nn.Sequential(MaskedLinear(...)), in_features=input_size, out_features=hidden_size)
-F2 = Sequential1D(nn.Sequential(nn.ReLU(), MaskedLinear(...)), in_features=hidden_size, out_features=hidden_size)
-F3 = Sequential1D(nn.Sequential(nn.ReLU(), MaskedLinear(...)), in_features=hidden_size, out_features=output_size)
+## Task Requirements
 
-blocks = [[None, F1, None, None],
-          [None, None, F2, None],
-          [None, None, None, F3],
+### 1. Dataset
+- Input: random vectors x ∈ ℝ^d (e.g., d=8)
+- Output: scalar y = ||x||₂ (Euclidean norm)
+- Generate synthetic training and validation sets using torch.randn()
+
+### 2. Model Architecture Details
+
+**Model 1: Chain Architecture (superdiagonal blocks)**
+```python
+# Define dimensions
+input_size = 8
+hidden_size = 16  
+output_size = 1
+
+# Create MaskedLinear layers - these are the trainable weight matrices we'll analyze
+f1_layer = MaskedLinear(in_features=input_size, out_features=hidden_size)
+f2_layer = MaskedLinear(in_features=hidden_size, out_features=hidden_size)
+f3_layer = MaskedLinear(in_features=hidden_size, out_features=output_size)
+
+# Wrap in Sequential1D blocks (F1 has no activation before it)
+F1 = Sequential1D(nn.Sequential(f1_layer), 
+                  in_features=input_size, out_features=hidden_size)
+F2 = Sequential1D(nn.Sequential(nn.ReLU(), f2_layer), 
+                  in_features=hidden_size, out_features=hidden_size)
+F3 = Sequential1D(nn.Sequential(nn.ReLU(), f3_layer), 
+                  in_features=hidden_size, out_features=output_size)
+
+# Build 4x4 block matrix with chain structure (only superdiagonal filled)
+in_features_list = [input_size, hidden_size, hidden_size, output_size]
+out_features_list = [input_size, hidden_size, hidden_size, output_size]
+
+blocks = [[None, F1,   None, None],
+          [None, None, F2,   None],
+          [None, None, None, F3  ],
           [None, None, None, None]]
 
-Second, train a Sequential2D model of the form:
+model1 = Sequential2D(blocks, in_features_list, out_features_list)
+```
 
-Gij = Sequential1D(nn.Sequential(MaskedLinear(...)), in_features=input_size, out_features=hidden_size)
+**Model 2: Dense Architecture (all lateral connections)**
+```python
+# Create 12 MaskedLinear layers for all non-None blocks
+g01_layer = MaskedLinear(in_features=input_size, out_features=hidden_size)
+g02_layer = MaskedLinear(in_features=input_size, out_features=hidden_size)
+# ... etc for g03, g11, g12, g13, g21, g22, g23, g31, g32, g33
 
+# Wrap each in Sequential1D (first column has no activation, others have ReLU)
+G01 = Sequential1D(nn.Sequential(g01_layer), 
+                   in_features=input_size, out_features=hidden_size)
+G11 = Sequential1D(nn.Sequential(nn.ReLU(), g11_layer), 
+                   in_features=hidden_size, out_features=hidden_size)
+# ... etc for all Gij
+
+# Build 4x4 block matrix with dense structure
 blocks = [[None, G01, G02, G03],
           [None, G11, G12, G13],
           [None, G21, G22, G23],
           [None, G31, G32, G33]]
 
-Provide visualizations of the singular value spectra of the various weight matrices in each block 
-as training progresses for both models.
+model2 = Sequential2D(blocks, in_features_list, out_features_list)
+```
 
-Use the notebook notebooks/6-rcp-Sequential-vs-Sequential2D.ipynb and as inspiration.
+### 3. Training Procedure
+- Use MSE loss (regression task)
+- Adam optimizer (learning rate ~0.001)
+- Train for enough epochs to see convergence (e.g., 100-500 epochs)
+- Store model checkpoints or weight snapshots at regular intervals (e.g., every 10-50 epochs)
 
-Keep the implementation as simple as possible and maximize the understandability of the code.  I will want to edit this code 
-later to try different problems and architectures.
+### 4. Singular Value Analysis & Visualization
+
+For each model, at each checkpoint:
+- Extract the actual weight matrix from each MaskedLinear layer
+  - Access via: `layer.weight_0 + layer.U * layer.mask` (this gives the full trained weight)
+- Compute SVD using `torch.linalg.svd()` to get singular values
+- Create plots showing:
+  - Singular value spectra (bar plots or line plots) for each block
+  - Evolution over training epochs (e.g., heatmap or multiple line plots)
+  - Comparison between Model 1 (chain) vs Model 2 (dense)
+
+Example visualization structure:
+- Figure 1: Model 1 spectra evolution (one subplot per block F1, F2, F3)
+- Figure 2: Model 2 spectra evolution (grid of subplots for all Gij blocks)
+- Figure 3: Comparison of spectral properties (e.g., condition numbers, rank approximations)
+
+### 5. Code Style Guidelines
+- Follow the style of `notebooks/6-rcp-Sequential-vs-Sequential2D.ipynb`
+- Use clear variable names and extensive markdown documentation
+- Keep functions simple and focused (avoid over-engineering)
+- Add comments explaining the mathematical concepts
+- Make hyperparameters easy to modify (define at top of cells)
+- Use reproducible random seeds
+
+### 6. Key Implementation Notes
+- MaskedLinear stores weights as: `weight = weight_0 + U * mask`
+- Access the full weight matrix for SVD analysis using the property above
+- Sequential1D is just a wrapper - the actual linear transformation is in the MaskedLinear
+- Sequential2D.blocks is a 4x4 matrix where None represents no connection
+- The in_features_list and out_features_list define dimensions at each "time step" in the iteration
+
+### Expected Output Structure
+1. **Markdown cell**: Problem description and mathematical setup
+2. **Code cells**: Imports, data generation, model definitions
+3. **Code cells**: Training loops with checkpoint saving
+4. **Code cells**: SVD computation functions
+5. **Visualization cells**: Multiple figures showing spectral evolution
+6. **Markdown cells**: Analysis and interpretation of results
+
+## Reference Materials
+- Study `notebooks/6-rcp-Sequential-vs-Sequential2D.ipynb` for coding style and structure
+- See `iterativennsimple/MaskedLinear.py` for weight matrix structure
+- See `iterativennsimple/Sequential2D.py` for block matrix architecture
