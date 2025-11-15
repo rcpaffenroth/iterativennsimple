@@ -2,6 +2,7 @@ import torch
 
 from iterativennsimple.MaskedLinear import MaskedLinear
 from iterativennsimple.SparseLinear import SparseLinear
+from iterativennsimple.Sequential1D import Sequential1D
 
 class Identity(torch.nn.Module):
     """
@@ -175,40 +176,41 @@ class Sequential2D(torch.nn.Module):
         for i, row in enumerate(block_types):
             blocks_row = []
             for j, block_type in enumerate(row):
+                block = None
                 if block_type is None:
-                    blocks_row.append(None)
+                    block = None
                 elif block_type == 'None':
-                    blocks_row.append(None)
+                    block =None
                 elif block_type == 'Identity':
-                    blocks_row.append(Identity(in_features=in_features_list[i],
-                                               out_features=out_features_list[j]))
+                    block = Identity(in_features=in_features_list[i],
+                                               out_features=out_features_list[j])
                 elif block_type == 'Linear':
-                    blocks_row.append(torch.nn.Linear(in_features_list[i], out_features_list[j]))
+                    block = torch.nn.Linear(in_features_list[i], out_features_list[j])
                 elif block_type == 'MaskedLinear':
-                    blocks_row.append(MaskedLinear(in_features_list[i], out_features_list[j]))
+                    block = MaskedLinear(in_features_list[i], out_features_list[j])
                 elif block_type == 'MaskedLinear.from_description':
                     # Note, the odd ordering of the first two arguments is on purpose.  The first argument is the output dimension(rows), and the second is the input dimension (columns) 
-                    blocks_row.append(MaskedLinear.from_description(
+                    block = MaskedLinear.from_description(
                                         out_features_list[j], in_features_list[i],  
                                         cfg['block_kwargs'][i][j]['block_type'],
                                         cfg['block_kwargs'][i][j]['initialization_type'],
                                         cfg['block_kwargs'][i][j]['trainable'],
                                         bias = cfg['block_kwargs'][i][j]['bias'],
-                                    ))
+                                    )
                 elif block_type == 'SparseLinear.from_description':
                     # Note, the odd ordering of the first two arguments is on purpose.  The first argument is the output dimension(rows), and the second is the input dimension (columns) 
                     # FIXME:  This is inefficient, because we are creating a MaskedLinear and 
                     # then converting it to a SparseLinear.  We should just create a 
                     # SparseLinear directly.  This will only really be an issue
                     # for large networks.
-                    tmp_block = MaskedLinear.from_description(
+                    block = MaskedLinear.from_description(
                                     out_features_list[j], in_features_list[i],  
                                     cfg['block_kwargs'][i][j]['block_type'],
                                     cfg['block_kwargs'][i][j]['initialization_type'],
                                     cfg['block_kwargs'][i][j]['trainable'],
                                     bias = cfg['block_kwargs'][i][j]['bias'],
                                 )
-                    blocks_row.append(SparseLinear.from_MaskedLinearExact(tmp_block))
+                    block = SparseLinear.from_MaskedLinearExact(block)
                 elif block_type == 'SparseLinear.from_singleBlock':
                     # Note, the odd ordering of the first two arguments is on purpose.  The first argument is the output dimension(rows), and the second is the input dimension (columns) 
                     # This is efficient, in that it only created the needed entries.
@@ -218,9 +220,30 @@ class Sequential2D(torch.nn.Module):
                                     cfg['block_kwargs'][i][j]['initialization_type'],
                                     bias = cfg['block_kwargs'][i][j]['bias'],
                                 )
-                    blocks_row.append(block)
                 else:
                     raise ValueError(f"Unknown block type {block_type}")
+                
+                if 'block_kwargs' in cfg and cfg['block_kwargs'][i][j] is not None and 'activation' in cfg['block_kwargs'][i][j]:
+                    assert 'activation_before' in cfg['block_kwargs'][i][j], "activation order must be specified"
+
+                    if cfg['block_kwargs'][i][j]['activation'] == 'ReLU':
+                        activation = torch.nn.ReLU()
+                    elif cfg['block_kwargs'][i][j]['activation'] == 'Sigmoid':
+                        activation = torch.nn.Sigmoid()
+                    elif cfg['block_kwargs'][i][j]['activation'] == 'ELU':
+                        activation = torch.nn.ELU()
+                    elif cfg['block_kwargs'][i][j]['activation'] == 'Identity':
+                        activation = torch.nn.Identity()
+                    else:
+                        raise ValueError('Unknown activation %s' % cfg['block_kwargs'][i][j]['activation'])
+
+                    if cfg['block_kwargs'][i][j]['activation_before']:
+                        block = Sequential1D(torch.nn.Sequential(activation, block), in_features=block.in_features, out_features=block.out_features)
+                    else: 
+                        block = Sequential1D(torch.nn.Sequential(block, activation), in_features=block.in_features, out_features=block.out_features)
+
+                blocks_row.append(block)
+
             blocks.append(blocks_row)
 
         model = Sequential2D(in_features_list, out_features_list, blocks)
