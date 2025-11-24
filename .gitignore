@@ -1,3 +1,5 @@
+tmp_*
+
 # wandb stuff
 wandb/
 
