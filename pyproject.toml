@@ -23,6 +23,7 @@ ipympl = "0.9.*"
 jupyterlab = "4.3.*"
 jupytext = "1.17.*"
 nbconvert = "7.16.*"
+scikit-learn = "1.7.*"
 # wandb.ai
 wandb = "0.19.*"
 # Command line parsing
