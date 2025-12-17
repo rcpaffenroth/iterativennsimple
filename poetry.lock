@@ -1330,7 +1330,7 @@ tqdm = ["tqdm"]
 
 [[package]]
 name = "generatedata"
-version = "0.3.0"
+version = "0.3.1"
 description = "Library of code to generate synthetic data for testing and benchmarking machine learning algorithms in a consistent dynamical systems setting."
 optional = false
 python-versions = "^3.10"
@@ -1355,8 +1355,8 @@ torchvision = "0.20.*"
 [package.source]
 type = "git"
 url = "https://github.com/rcpaffenroth/generatedata.git"
-reference = "v0.3.0"
-resolved_reference = "fdfce0624206370cdd221b6280ee7089077ddff3"
+reference = "v0.3.1"
+resolved_reference = "a6bd3f046951a40a2f8c99cb7e9816ea239b3d1f"
 
 [[package]]
 name = "gitdb"
@@ -5600,4 +5600,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "e8030b1ec748d61bf21a1f54b5b1b82fcebdccfba22b18fa62594aa63973a228"
+content-hash = "171082beb5bcea5cce03afc6bfdaa3757c9b743d5cf69b9e9e5267525b5d0622"
