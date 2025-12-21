@@ -57,7 +57,7 @@ print(f"Target output matrix will have {target_size} elements.")
 print(f"Actual size in bytes for all three (CSR matrix, dense input, and dense output) matrices: {(csr_size + input_size + target_size) * 2 / (1024**3):.2f} GB")
 # We can try to allocate a matrix of this size and see if it fits
 
-FILL IN WITH CORRECT CSR CODE
+# FILL IN WITH CORRECT CSR CODE
 
 # Some sanity checks
 print(f"Result matrix size: {C.size()}")
