@@ -39,8 +39,8 @@ print(f"Estimated maximum square matrix size: {max_matrix_size} x {max_matrix_si
 # Let's focus on a billion parameters for now.  This is approximately 2^30 parameters.
 # For a square matrix, this is sqrt(2^30) = 2^15 = 32768
 print(f"Target square matrix size for ~1B parameters: 32768 x 32768")
-# NOTE: 32768*15//8 does not quite fit onto a 40 GB GPU, so we use 32768*7//4 instead
-target_size = 32768*7//4
+# NOTE: 32768*15//8 does not quite fit onto a 24 GB GPU, so we use 32768*7//4 as our largest size 
+target_size = 32768
 print(f"Actual size in bytes for three (two input and one output) matrices of size {target_size} x {target_size}: {3 * target_size * target_size * 2 / (1024**3):.2f} GB")
 # We can try to allocate a matrix of this size and see if it fits
 try:
@@ -58,6 +58,12 @@ try:
     print(f"Actual memory used for two matrices: {actual_memory_used / (1024**3):.2f} GB")
 except RuntimeError as e:   
     print(f"Failed to allocate matrices of size {target_size} x {target_size} on GPU: {e}")
+
+# Warm up compiled function (first run includes compilation time)
+print("\nWarming up function...")
+_ = torch.matmul(A, B)
+torch.cuda.synchronize()
+print("Warmup complete.")
 
 # Time the matrix multiplication with gpu synchronization
 start_time = time.time()
