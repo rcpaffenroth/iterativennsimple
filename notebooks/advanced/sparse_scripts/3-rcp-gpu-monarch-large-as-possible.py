@@ -61,11 +61,14 @@ def block_diagonal_matrix_multiply(A, B, P1, P2):
     total_rows = sum(block.size(0) for block in A)
     assert total_rows == B.size(0), "Sum of block sizes in A must equal number of rows in B"
     # Create output tensor instead of modifying B in-place
-    result = B[P1, :].clone()
+    result = B.clone()
+    # Permute the rows of B according to P1
+    B = B[P1]
     for i, block in enumerate(A):
         start_row = i * block.size(0)
         end_row = start_row + block.size(0)
         result[start_row:end_row, :] = block @ B[start_row:end_row, :]
+    # Permute the rows of the result according to P2
     return result[P2]
 
 block_diagonal_matrix_multiply_opt = torch.compile(block_diagonal_matrix_multiply)

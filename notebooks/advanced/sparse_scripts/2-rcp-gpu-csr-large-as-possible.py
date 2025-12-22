@@ -43,7 +43,7 @@ print(f"Target square matrix size for ~1B parameters: 32768 x 32768")
 rows_csr = 32768
 cols_csr = rows_dense = 32768
 cols_dense = 32768
-csr_density = 0.02  # 99% density
+csr_density = 0.1  # 99% density
 
 csr_size = int(rows_csr * cols_csr * csr_density)
 print(f"CSR matrix will have {csr_size} non-zero elements.")
