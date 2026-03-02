@@ -9,26 +9,23 @@ automatically install python packages, run scripts, install extensions, etc.
 If you are using this in Codespaces you can just run the following commands in the terminal:
 
 ```bash
-poetry shell
-poetry install --with dev
+uv sync --group dev
+source .venv/bin/activate
 ```
 
-## pytorch and poetry
-To get poetry to install the correct version of pytorch you need to so something like this
+## pytorch and uv
+PyTorch package index configuration is already defined in `pyproject.toml` under `[tool.uv.index]` and `[tool.uv.sources]`.
 
 ```bash
-# This adds the pytorch repo to the list of sources
-poetry source add -p explicit pytorch https://download.pytorch.org/whl/cpu
-# This uses the pytorch repo to install pytorch instead of the default
-poetry add --source pytorch torch torchvision
+# Sync dependencies (including dev group)
+uv sync --group dev
 ```
 
-## vscode and poetry
-You want the virtual environment to be local, so that vscode can find it.  The "--local" flag is the important part
-and will create the poetry.toml file that we can submit to git.
+## vscode and uv
+uv uses a local `.venv` by default, which VS Code can discover automatically.
 
 ```bash
-poetry config virtualenvs.in-project true --local
+uv sync
 ```
 
 ## Generating test data

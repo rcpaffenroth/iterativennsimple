@@ -1,3 +1,10 @@
+## [v0.4.0] - TBD
+- Version bump from 0.3.1 to 0.4.0
+- Implemented sparse monarch matrix
+- Cleaned up torch-sparse and torch-scatter dependencies
+- Moved to uv
+- Protect main with github actions
+
 ## [v0.3.1] - 3-2-2026
 - Version bump from 0.3.0 to 0.3.1
 - Added `scikit-learn = 1.6.*` dependency

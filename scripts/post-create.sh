@@ -1,11 +1,11 @@
 #! /bin/bash
 
 # Install the python dependencies
-poetry install
+uv sync
 
 # Or, install the developer version
-# poetry install --with dev
+# uv sync --group dev
 
 # Or, install the developer version with the sparse dependencies
-# poetry install --with dev,sparse 
+# uv sync --group dev --group sparse
 

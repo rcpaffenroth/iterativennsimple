@@ -96,7 +96,7 @@ scripts/post-create.sh
 
 ### 2. Activate Python Environment
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 ### 3. Start with Core Notebooks
@@ -119,14 +119,14 @@ This repository prioritizes:
 - **Mathematical Rigor**: Precise connections between theory and implementation
 - **Educational Clarity**: Clear progression from basic concepts to advanced applications
 - **Reproducibility**: All results are tested and verified
-- **Modern Tools**: Uses contemporary Python ML stack (PyTorch, Plotly, Poetry)
+- **Modern Tools**: Uses contemporary Python ML stack (PyTorch, Plotly, uv)
 
 ## Modern Dependencies
 
 The project uses cutting-edge tools:
 - **PyTorch 2.5+**: Latest deep learning framework
 - **Plotly 5.24+**: Interactive visualizations
-- **Poetry**: Modern Python dependency management
+- **uv**: Fast Python package and environment management
 - **Weights & Biases**: Experiment tracking and visualization
 - **pytest + nbmake**: Automated notebook testing
 
