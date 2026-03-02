@@ -2,10 +2,6 @@ from typing import Any
 
 import numpy as np
 import torch
-try:
-    import torch_sparse
-except ImportError:
-    torch_sparse = None
 
 import logging
 logger = logging.getLogger(__name__)
@@ -78,7 +74,7 @@ class SparseLinear(torch.nn.Module):
     def __init__(self, 
                  sparse_trainable: torch.Tensor, 
                  sparse_not_trainable: torch.tensor = None, 
-                 optimized_implementation: bool = True,
+                 optimized_implementation: bool = False,
                  bias: bool = True,
                  device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
@@ -91,8 +87,9 @@ class SparseLinear(torch.nn.Module):
 
         # Check to see if we have torch_sparse
         self.optimized_implementation = optimized_implementation
-        if torch_sparse is None and self.optimized_implementation:
-            logger.warning("torch_sparse is not installed, falling back to slow implementation")
+        if self.optimized_implementation:
+            logger.warning("torch_sparse is not installed and has been deprecated, falling back to slow implementation")
+            logger.warning("WARNING: THIS IS A SLOW IMPLEMENTATION, PLEASE CONSIDER USING THE MONARCH MATRIX BASED VERSION INSTEAD")
             self.optimized_implementation = False
             
         # Unpack the standard pytorch sparse matrix
@@ -198,7 +195,7 @@ class SparseLinear(torch.nn.Module):
 
     @staticmethod
     def from_coo(coo,
-                 optimized_implementation: bool = True,
+                 optimized_implementation: bool = False,
                  bias: bool = False, device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a COO tensor.
@@ -211,7 +208,7 @@ class SparseLinear(torch.nn.Module):
 
     @staticmethod
     def from_singleBlock(out_features, in_features, block_type, initialization_type,
-                         optimized_implementation: bool = True,
+                         optimized_implementation: bool = False,
                          bias: bool = True, device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a single block description.
@@ -255,7 +252,7 @@ class SparseLinear(torch.nn.Module):
         
     @staticmethod
     def from_MaskedLinear(M: MaskedLinear, 
-                          optimized_implementation: bool = True,
+                          optimized_implementation: bool = False,
                           device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a masked matrix.  This is a simpler and faster version of from_MaskedLinearExact.
@@ -283,7 +280,7 @@ class SparseLinear(torch.nn.Module):
     @staticmethod
     def from_MaskedLinearExact(M: MaskedLinear, 
                                keep_trainable_zeros: bool = True, 
-                               optimized_implementation: bool = True, 
+                               optimized_implementation: bool = False, 
                                device=None, dtype=None) -> Any:
         """
         Create a sparse matrix from a masked matrix.  This should be, mathematically, the same linear operator
@@ -350,31 +347,17 @@ class SparseLinear(torch.nn.Module):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         start_time = time.perf_counter()
         if self.optimized_implementation:
-            # FIXME: This is a hack to get around the fact that the indices are not on the same device as the input
-            # I am not sure this is the fastest way to do this
-            tmp_indices = self.sparse_trainable_indices.to(input.device)
-            # NOTE: torch.sparse mm does provide gradients for sparse
-            # This is the fast way to do it, but the library is a little funky.  I.e., I am not sure
-            # how well it is maintained, though it seems fine as of 12/2024.
-            y_before_T = torch_sparse.spmm(tmp_indices,
-                                           self.sparse_trainable_values,
-                                           self.out_features,
-                                           self.in_features,
-                                           # NOTE: The operation we want is y = xA^T, to be consistent with
-                                           # https://pytorch.org/docs/stable/generated/torch.nn.functional.linear.html
-                                           # However, the library does y = Ax, so we need to transpose the input
-                                           input.T)
-        else:
-            # This is the slow way to do it
-            # NOTE: the strange order of the arguments
-            # to zip is because of the transpose.
-            y_before_T = torch.zeros(self.out_features, input.shape[0], device=input.device, dtype=input.dtype)
-            for (i,j), v in zip(self.sparse_trainable_indices.T,
-                                self.sparse_trainable_values):
-                # NOTE: The operation we want is y = xA^T, to be consistent with
-                # https://pytorch.org/docs/stable/generated/torch.nn.functional.linear.html
-                # However, the library does y = Ax, so we need to transpose the input
-                y_before_T[i,:] += v*(input.T)[j,:]
+            logger.warning("torch_sparse is not installed and has been deprecated, falling back to slow implementation")
+        # This is the slow way to do it
+        # NOTE: the strange order of the arguments
+        # to zip is because of the transpose.
+        y_before_T = torch.zeros(self.out_features, input.shape[0], device=input.device, dtype=input.dtype)
+        for (i,j), v in zip(self.sparse_trainable_indices.T,
+                            self.sparse_trainable_values):
+            # NOTE: The operation we want is y = xA^T, to be consistent with
+            # https://pytorch.org/docs/stable/generated/torch.nn.functional.linear.html
+            # However, the library does y = Ax, so we need to transpose the input
+            y_before_T[i,:] += v*(input.T)[j,:]
         logger.debug(f'sparse mm {time.perf_counter()-start_time:e}')
 
         start_time = time.perf_counter()
