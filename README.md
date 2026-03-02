@@ -41,9 +41,8 @@ The key insight: by sharing weights W and bias b across all layers, we create a 
 - **`Sequential2D.py`**: Main iterative network implementation supporting 2D problems
 - **`Sequential1D.py`**: Simplified 1D version for basic experimentation  
 - **`MaskedLinear.py`**: Linear layers with learnable masking for sparse connectivity
-- **`SparseLinear.py`**: Efficient sparse linear transformations
+- **`SparseLinear.py`**: DEPRECATED: Original sparse implementation using torch-sparse and torch-scatter (replaced by Monarch matrix)
 - **`bmatrix.py`**: Utilities for block matrix operations
-- **`utils/`**: Utility modules for data handling and processing
 
 ### Notebooks (`notebooks/`)
 

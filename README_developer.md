@@ -51,11 +51,3 @@ pytest
 # Run specific test file
 pytest tests/test_Sequential2D.py
 ```
-
-## Generating Test Data
-To generate local test data:
-
-```bash
-cd scripts
-python generate_data.py
-```
