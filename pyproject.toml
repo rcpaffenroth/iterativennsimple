@@ -32,10 +32,6 @@ dev = [
     "pylint==3.2.*",
     "nbmake==1.5.*",
 ]
-# sparse = [
-#     "torch-scatter",
-#     "torch-sparse",
-# ]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
