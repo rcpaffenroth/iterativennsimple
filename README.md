@@ -88,13 +88,27 @@ Apply iterative networks to real problems:
 
 ## Quick Start
 
-### 1. Environment Setup
-Open a terminal and run the setup script:
+### 1. Install uv
+If you don't have uv installed, install it first:
 ```bash
-scripts/post-create.sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### 2. Activate Python Environment
+### 2. Setup Python Environment
+Clone the repository and set up the Python environment:
+```bash
+git clone <repository-url>
+cd iterativennsimple
+uv sync
+```
+
+For development with additional testing tools:
+```bash
+uv sync --extra dev
+```
+
+### 3. Activate Python Environment
+Activate the virtual environment created by uv:
 ```bash
 source .venv/bin/activate
 ```

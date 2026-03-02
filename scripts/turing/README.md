@@ -1,62 +1,114 @@
-# TL;DR
+# Turing Cluster Guide
 
-This repository contains several scripts to help you get started running Python on Turing. I have attempted to document the scripts so please look at the scripts themselves for more information.
+This directory contains scripts and documentation for running experiments on the Turing compute cluster.
 
+## Quick Start
 
-## jupyter_notebooks
+Before using Turing, set up the Python environment locally using uv:
 
-Some scripts for running Jupyter notebooks on Turing. There are examples for Pytorch and Scilkit-learn
+```bash
+# From the project root
+uv sync --group dev
 
-## python
+# Activate the environment
+source .venv/bin/activate
+```
 
-Some scripts for running Python on Turing. There are examples for Pytorch and Scilkit-learn
+For GPU-accelerated sparse computing:
+```bash
+uv sync --group dev --group sparse
+```
 
-## scripts
+## Overview
 
-Some scripts for using Turing more generally. For example, for getting an interactive node.
+This repository contains several directories with scripts and docs:
 
-# Introduction to Turing (as of 7/26/2025)
+- **`jupyter_notebooks/`**: Scripts for running Jupyter notebooks non-interactively with GPU support
+- **`python/`**: Examples for running Python scripts on compute nodes  
+- **`scripts/`**: General utilities for working with Turing (interactive nodes, job monitoring, etc.)
 
-## Getting started
+# Getting Started with Turing
 
-Turing is the key computational resource at WPI and is quite useful for doing large scale machine learning experiments, far larger than one could do on one's laptop. However, Turing can be a bit daunting to use at first, so I have attempted to make things a bit easier with this material.
+Turing is WPI's key computational resource for large-scale machine learning experiments. While powerful, it can be daunting at first. This guide makes it easier to get started.
 
-## What is Turing and getting started with "slurm"
+## What is Turing and Getting Started with SLURM
 
-Turing is a collection of "compute" nodes all accessible from a "head" node. When you log onto turing, say by running:
+Turing is a collection of compute nodes accessible from a head node. When you log onto Turing:
 
+```bash
 ssh turing.wpi.edu
+```
 
-you will find yourself on the turing head node. Normally you do _not_ run long or computational intensive jobs but instead ask for a "compute" node to be assigned to you. How you do you that? By using a system called "slurm". Slurm takes care of assigning users compute nodes in a fair manner, and more information can be found here:
+You are on the **head node** - do NOT run intensive computations here. Instead, request compute nodes using **SLURM** (Simple Linux Utility for Resource Management).
 
+### Basic SLURM Workflow
+
+```bash
+# Submit a job for scheduling
+sbatch myjob.sh
+
+# Check your jobs
+squeue -u $USER
+
+# Cancel a job
+scancel <job_id>
+```
+
+SLURM handles fair resource allocation across users and nodes. For complete documentation:  
 https://arc.wpi.edu/cluster-documentation/build/html/index.html
 
-All of my scripts above make use of slurm for accessing compute nodes on turing.
+## PyTorch and GPU Access
 
-## A few notes on pytorch
+To run PyTorch efficiently, request a GPU-enabled compute node in your SLURM script:
 
-To run pytorch efficiently you require access to a turing compute node with a GPU. Things are moving fast with GPU technology, and GPU hardware can reach its end-of-life suprisingly quickly. At this moment these are the GPUs called:
+```bash
+#SBATCH --gres=gpu:1
+```
 
-V100:  Older GPU, but still works for many things.
-L40S:  A newer GPU, but not as much memory as fancier GPUs. For many    uses this is the best GPU to use.
-A100:  A newer GPU with a lot of memory.  This is the baseline high-performance GPU on turing.
-H100:  A newer GPU with a lot of memory.  This is the high-performance GPU on turing better than the A100.
-H200:  The latest and greatest GPU on turing.  
+### Current GPU Hardware (as of 2026)
 
-Of course, when you read this things may have changed, but I have attempted to provide a set of scripts that at least work on these compute nodes.
+Turing has several GPU generations available. Hardware evolves over time, but current options include:
 
-# A few note for advanced users
+| GPU | Use Case |
+|-----|----------|
+| **V100** | Learning, small workloads |
+| **L40S** | Standard ML workloads, good balance |
+| **A100** | High-memory, compute-intensive work |
+| **H100** | State-of-the-art performance |
+| **H200** | Newest, maximum memory |
 
-There are some additional tools that I have use all the time, but are perhaps only of interest to mroe advanced users
+Specify GPU type in SLURM scripts or accept the default allocation.
 
-## vscode is awesome
+# Advanced Topics for Power Users
 
-I use vscode (https://code.visualstudio.com/) as my editor of choice. It is awesome and makes working with turing (and python an general) a joy. You can run vscode on turing, but have the window running on your local machine. Also, the python support has advanced to the point where you can run and edit jupyter notebooks just like any other file. I.e., as far as you are concerned a turing compute node is on your desktop :-)
+The following tools can dramatically improve your workflow on Turing:
 
-## parameterized papermill is awesome
+## VS Code Remote Development
 
-papermill (https://papermill.readthedocs.io/en/latest/) not only lets you run many jupyter notebooks in parallel on turing, it also let's you parameterize them is a very slick way (https://papermill.readthedocs.io/en/latest/usage-parameterize.html). This is gret for doing parameter students (e.g., looking at different architectures, activation functions, etc.). I have generated hundreds of notebooks this way for papers.
+VS Code (https://code.visualstudio.com/) is an excellent editor for Turing development. You can:
+- Run VS Code on the Turing head node with the GUI on your local machine
+- Edit files and notebooks with full IDE support
+- Run code directly from your "desktop" (actually Turing)
 
-## comet.ml is awesome
+This provides a seamless remote development experience.
 
-But, how do you keep track of hundreds of notebooks? MLOps is an emerging field (https://en.wikipedia.org/wiki/MLOps) and there are many groups working on organizing larger scale ML experiments. The classic software in this domain is tensorboard (https://www.tensorflow.org/tensorboard), but here are now many competitors. My favorite in this domain is Comet.ml (https://www.comet.ml/site/). They have a very generous educational account option, and I can't tell you how many hours this has saved me!
+## Papermill for Notebook Automation
+
+Papermill (https://papermill.readthedocs.io/en/latest/) enables non-interactive notebook execution with powerful parameter management:
+
+- Run multiple notebooks in parallel across Turing compute nodes
+- Parameterize notebooks for hyperparameter sweeps
+- Automate architecture and activation function studies
+- Generate hundreds of experimental variations
+
+This is especially powerful for parameter studies and batch experimentation. See `jupyter_notebooks/README.md` for examples.
+
+## MLOps Tools for Experiment Tracking
+
+Managing large-scale ML experiments requires organization. Popular options include:
+
+- **Weights & Biases** (https://wandb.ai/): Comprehensive tracking, visualization, and collaboration
+- **Comet.ml** (https://www.comet.ml/): Educational accounts with generous limits
+- **TensorBoard** (https://www.tensorflow.org/tensorboard): TensorFlow-native tracking
+
+These tools help track, compare, and visualize hundreds of experiments across Turing jobs. Highly recommended for serious research work.

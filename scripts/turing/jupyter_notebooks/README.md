@@ -1,12 +1,56 @@
-# Introduction
+# Running Jupyter Notebooks on Turing
 
-Here are some examples of running jupyter notebooks on Turing
+This directory contains scripts for running Jupyter notebooks on the Turing compute cluster, including examples for GPU-accelerated workloads.
 
-## Non-interactive batch run of a jupyter notebook
+## Environment Setup
 
-This is an example that will run a "batch" Jupyter notebook using a GPU. I.e., a Jupyter notebook that will run non-interactively. This idea can be used
-to several long running Jupyter notebooks in parallel. This uses a program called "papermill" (https://papermill.readthedocs.io/en/latest/) that runs Jupyter notebooks without user input
+Before submitting notebook jobs to Turing, set up the Python environment locally using uv:
 
+```bash
+# From the project root
+uv sync --group dev
+
+# Activate the environment
+source .venv/bin/activate
+```
+
+## Non-interactive Batch Execution
+
+Jupyter notebooks can be run non-interactively on Turing using Papermill, which enables:
+- Running notebooks as batch jobs with GPU access
+- Parameterizing notebooks for parameter sweeps
+- Running multiple notebooks in parallel
+
+### Example: Run Sequential Comparison Notebook
+
+```bash
 sbatch Sequential-vs-Sequential2D.sh
+```
 
-Note, this is far more effective if you know a bit about parameterizing Juypter notebooks using papermill (https://papermill.readthedocs.io/en/latest/usage-parameterize.html).
+This submits a batch job that executes `Sequential-vs-Sequential2D.ipynb` on a GPU compute node.
+
+## Parameterizing Notebooks with Papermill
+
+Papermill allows you to pass parameters to notebooks before execution, which is useful for:
+- Testing different hyperparameters
+- Running parameter sweeps across multiple jobs
+- Automating experiment variations
+
+For more information, see the [Papermill documentation](https://papermill.readthedocs.io/en/latest/usage-parameterize.html).
+
+### Example Parameterization
+
+In your notebook, add a cell tagged with `parameters`:
+
+```python
+# Parameters
+learning_rate = 0.001
+batch_size = 32
+num_epochs = 100
+```
+
+Then run with custom parameters:
+
+```bash
+papermill input_notebook.ipynb output_notebook.ipynb -p learning_rate 0.01 -p batch_size 64
+```
