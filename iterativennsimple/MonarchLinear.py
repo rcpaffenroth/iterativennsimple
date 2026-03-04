@@ -245,12 +245,12 @@ class MonarchLinear(nn.Module):
 
         # S[perm_out[a], perm_in[b]] = M[a, b]  for all a, b.
         # Equivalently:
-        #   step 1: permute rows    — S_temp[perm_out, :] = M
+        #   step 1: permute rows    — S_temp[inv_perm_out, :] = M
         #   step 2: permute columns — S[:, perm_in] = S_temp
         S_temp = torch.zeros(
             self.out_features, self.in_features, device=M.device, dtype=M.dtype
         )
-        S_temp[self.inv_perm_out] = M  # row a of M goes to row perm_out[a]
+        S_temp[self.inv_perm_out] = M  # row a of M goes to row inv_perm_out[a]
 
         S = torch.zeros_like(S_temp)
         S[:, self.perm_in] = S_temp  # col b of S_temp goes to col perm_in[b]
