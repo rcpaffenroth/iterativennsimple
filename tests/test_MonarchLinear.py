@@ -168,7 +168,7 @@ def test_gradient_matches_dense():
     # then apply the same row/column permutation to get S_grad.
     M_grad = torch.block_diag(*[b.grad.clone() for b in layer.blocks])
     S_grad_temp = torch.zeros(layer.out_features, layer.in_features)
-    S_grad_temp[layer.perm_out] = M_grad          # permute rows
+    S_grad_temp[layer.inv_perm_out] = M_grad          # permute rows
     S_grad = torch.zeros_like(S_grad_temp)
     S_grad[:, layer.perm_in] = S_grad_temp        # permute columns
     monarch_bias_grad = layer.bias.grad.clone()
@@ -183,7 +183,7 @@ def test_gradient_matches_dense():
     for k in range(layer.num_blocks):
         bor = layer.block_out_features[k]
         bir = layer.block_in_features[k]
-        rows = layer.perm_out[row_offset: row_offset + bor]
+        rows = layer.inv_perm_out[row_offset: row_offset + bor]
         cols = layer.perm_in[col_offset: col_offset + bir]
         monarch_mask[rows[:, None], cols[None, :]] = True
         row_offset += bor
@@ -219,7 +219,7 @@ def test_optimizer_step():
     # Snapshot block values before step
     blocks_before = [b.data.clone() for b in layer.blocks]
     perm_in_before  = layer.perm_in.clone()
-    perm_out_before = layer.perm_out.clone()
+    inv_perm_out_before = layer.inv_perm_out.clone()
 
     optimizer = torch.optim.SGD(layer.parameters(), lr=0.1)
     x = torch.randn(8, 16)
@@ -233,7 +233,7 @@ def test_optimizer_step():
 
     # Permutations must be unchanged (they are buffers, not parameters)
     assert torch.equal(layer.perm_in, perm_in_before)
-    assert torch.equal(layer.perm_out, perm_out_before)
+    assert torch.equal(layer.inv_perm_out, inv_perm_out_before)
 
 
 # ---------------------------------------------------------------------------

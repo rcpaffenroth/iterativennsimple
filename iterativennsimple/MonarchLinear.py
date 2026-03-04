@@ -169,8 +169,10 @@ class MonarchLinear(nn.Module):
         y = self._block_matmul(x)  # (batch, out_features)
 
         # 3. Inverse-permute output columns:
-        #    result[:, j] = y[:, inv_perm_out[j]]
-        result = y[:, self.inv_perm_out]
+        # #    result[:, j] = y[:, inv_perm_out[j]]
+        # result = y[:, self.inv_perm_out]
+        #    result[:, j] = y[:, perm_out[j]]
+        result = y[:, self.perm_out]
 
         # 4. Bias
         if self.bias is not None:
@@ -232,6 +234,15 @@ class MonarchLinear(nn.Module):
         # Build block-diagonal M from the trainable blocks.
         M = torch.block_diag(*list(self.blocks))  # (out_features, in_features)
 
+        # # S[perm_out[a], perm_in[b]] = M[a, b]  for all a, b.
+        # # Equivalently:
+        # #   step 1: permute rows    — S_temp[perm_out, :] = M
+        # #   step 2: permute columns — S[:, perm_in] = S_temp
+        # S_temp = torch.zeros(
+        #     self.out_features, self.in_features, device=M.device, dtype=M.dtype
+        # )
+        # S_temp[self.perm_out] = M  # row a of M goes to row perm_out[a]
+
         # S[perm_out[a], perm_in[b]] = M[a, b]  for all a, b.
         # Equivalently:
         #   step 1: permute rows    — S_temp[perm_out, :] = M
@@ -239,7 +250,7 @@ class MonarchLinear(nn.Module):
         S_temp = torch.zeros(
             self.out_features, self.in_features, device=M.device, dtype=M.dtype
         )
-        S_temp[self.perm_out] = M  # row a of M goes to row perm_out[a]
+        S_temp[self.inv_perm_out] = M  # row a of M goes to row perm_out[a]
 
         S = torch.zeros_like(S_temp)
         S[:, self.perm_in] = S_temp  # col b of S_temp goes to col perm_in[b]
