@@ -2,6 +2,7 @@ import torch
 
 from iterativennsimple.Sequential2D import Sequential2D
 from iterativennsimple.MaskedLinear import MaskedLinear
+from iterativennsimple.MonarchLinear import MonarchLinear
 
 def test_Sequential2D_Linear():
     in_features_list = [2, 3]
@@ -272,4 +273,146 @@ def test_identity_block():
     
     # With Identity blocks in diagonal positions, input should equal output
     assert torch.allclose(X_in, X_out), "Identity blocks should preserve input"
+
+
+# ---------------------------------------------------------------------------
+# MonarchLinear tests
+# ---------------------------------------------------------------------------
+
+def test_Sequential2D_MonarchLinear():
+    """Test Sequential2D constructed directly with MonarchLinear blocks."""
+    in_features_list = [8, 16]
+    out_features_list = [8, 16]
+    blocks = [
+        [MonarchLinear.from_uniform_blocks(8, 8, num_blocks=2, seed=0),
+         MonarchLinear.from_uniform_blocks(8, 16, num_blocks=2, seed=1)],
+        [MonarchLinear.from_uniform_blocks(16, 8, num_blocks=2, seed=2),
+         MonarchLinear.from_uniform_blocks(16, 16, num_blocks=4, seed=3)],
+    ]
+    model = Sequential2D(in_features_list, out_features_list, blocks)
+    X_in = torch.randn(10, 24)  # 8 + 16 = 24
+    X_out = model.forward(X_in)
+    assert X_out.shape == (10, 24), f"Expected shape (10, 24), got {X_out.shape}"
+
+
+def test_sequential2D_factory_monarch_uniform_blocks():
+    """Test Sequential2D.from_config with MonarchLinear.from_uniform_blocks."""
+    cfg = {
+        "in_features_list": [64, 64],
+        "out_features_list": [64, 64],
+        "block_types": [
+            ["MonarchLinear.from_uniform_blocks", "MonarchLinear.from_uniform_blocks"],
+            ["MonarchLinear.from_uniform_blocks", "MonarchLinear.from_uniform_blocks"],
+        ],
+        "block_kwargs": [
+            [{"num_blocks": 4, "bias": True, "initialization_type": "kaiming", "seed": 0},
+             {"num_blocks": 4, "bias": True, "initialization_type": "kaiming", "seed": 1}],
+            [{"num_blocks": 4, "bias": True, "initialization_type": "kaiming", "seed": 2},
+             {"num_blocks": 4, "bias": True, "initialization_type": "kaiming", "seed": 3}],
+        ],
+    }
+    model = Sequential2D.from_config(cfg)
+    X_in = torch.randn(8, 128)  # 64 + 64 = 128
+    X_out = model.forward(X_in)
+    assert X_out.shape == (8, 128), f"Expected shape (8, 128), got {X_out.shape}"
+
+
+def test_sequential2D_factory_monarch_block_config():
+    """Test Sequential2D.from_config with MonarchLinear.from_block_config."""
+    cfg = {
+        "in_features_list": [12],
+        "out_features_list": [12],
+        "block_types": [
+            ["MonarchLinear.from_block_config"],
+        ],
+        "block_kwargs": [
+            [{"block_in_features": [4, 4, 4], "block_out_features": [4, 4, 4],
+              "bias": True, "initialization_type": "kaiming", "seed": 42}],
+        ],
+    }
+    model = Sequential2D.from_config(cfg)
+    X_in = torch.randn(5, 12)
+    X_out = model.forward(X_in)
+    assert X_out.shape == (5, 12), f"Expected shape (5, 12), got {X_out.shape}"
+
+
+def test_sequential2D_factory_monarch_sparsity_target():
+    """Test Sequential2D.from_config with MonarchLinear.from_sparsity_target."""
+    cfg = {
+        "in_features_list": [64],
+        "out_features_list": [64],
+        "block_types": [
+            ["MonarchLinear.from_sparsity_target"],
+        ],
+        "block_kwargs": [
+            [{"target_sparsity": 0.75, "bias": True, "initialization_type": "kaiming", "seed": 7}],
+        ],
+    }
+    model = Sequential2D.from_config(cfg)
+    X_in = torch.randn(6, 64)
+    X_out = model.forward(X_in)
+    assert X_out.shape == (6, 64), f"Expected shape (6, 64), got {X_out.shape}"
+
+
+def test_sequential2D_monarch_gradient_flow():
+    """Verify gradients flow through MonarchLinear blocks in Sequential2D."""
+    cfg = {
+        "in_features_list": [16],
+        "out_features_list": [16],
+        "block_types": [
+            ["MonarchLinear.from_uniform_blocks"],
+        ],
+        "block_kwargs": [
+            [{"num_blocks": 4, "bias": True, "initialization_type": "kaiming", "seed": 0}],
+        ],
+    }
+    model = Sequential2D.from_config(cfg)
+    X_in = torch.randn(4, 16)
+    X_out = model.forward(X_in)
+    loss = X_out.sum()
+    loss.backward()
+
+    for name, param in model.named_parameters():
+        assert param.grad is not None, f"Parameter '{name}' has no gradient"
+
+
+def test_sequential2D_monarch_parameter_count():
+    """Verify trainable parameter count for a 1×1 MonarchLinear grid."""
+    num_blocks = 4
+    in_out = 64
+    # Each block: (in_out/num_blocks) * (in_out/num_blocks) weights + in_out biases
+    block_size = in_out // num_blocks
+    expected = num_blocks * block_size * block_size + in_out  # weights + bias
+
+    cfg = {
+        "in_features_list": [in_out],
+        "out_features_list": [in_out],
+        "block_types": [["MonarchLinear.from_uniform_blocks"]],
+        "block_kwargs": [[{"num_blocks": num_blocks, "bias": True,
+                           "initialization_type": "kaiming", "seed": 0}]],
+    }
+    model = Sequential2D.from_config(cfg)
+    assert model.number_of_trainable_parameters() == expected, (
+        f"Expected {expected} parameters, got {model.number_of_trainable_parameters()}"
+    )
+
+
+def test_sequential2D_monarch_mixed_blocks():
+    """Test mixing MonarchLinear with Linear and None blocks in Sequential2D."""
+    cfg = {
+        "in_features_list": [32, 32],
+        "out_features_list": [32, 32],
+        "block_types": [
+            ["MonarchLinear.from_uniform_blocks", "Linear"],
+            [None, "MonarchLinear.from_uniform_blocks"],
+        ],
+        "block_kwargs": [
+            [{"num_blocks": 4, "bias": True, "initialization_type": "kaiming", "seed": 0}, None],
+            [None, {"num_blocks": 4, "bias": True, "initialization_type": "kaiming", "seed": 1}],
+        ],
+    }
+    model = Sequential2D.from_config(cfg)
+    X_in = torch.randn(10, 64)  # 32 + 32 = 64
+    X_out = model.forward(X_in)
+    assert X_out.shape == (10, 64), f"Expected shape (10, 64), got {X_out.shape}"
 
