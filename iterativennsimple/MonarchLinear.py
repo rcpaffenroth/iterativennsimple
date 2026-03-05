@@ -17,7 +17,7 @@ class MonarchLinear(nn.Module):
     The forward pass computes y = x S^T + b as:
         1. Permute input columns:    x_tilde = x[:, perm_in]
         2. Block-diagonal matmul:    y_tilde = x_tilde @ M^T   (via split/loop or torch.bmm)
-        3. Inverse-permute outputs:  result   = y_tilde[:, inv_perm_out]
+        3. Inverse-permute outputs:  result   = y_tilde[:, perm_out]
         4. Add bias.
 
     This avoids constructing S explicitly and leverages dense BLAS kernels
@@ -42,7 +42,6 @@ class MonarchLinear(nn.Module):
         blocks (nn.ParameterList): Trainable block weight tensors.
         perm_in  (Tensor): Input permutation buffer (not trainable).
         perm_out (Tensor): Output permutation buffer (not trainable).
-        inv_perm_out (Tensor): Precomputed inverse of perm_out (not trainable).
         bias (Parameter or None): Learnable bias vector.
 
     Example::
@@ -115,10 +114,6 @@ class MonarchLinear(nn.Module):
         # the module (.to(device), state_dict) but receive no gradients.
         self.register_buffer("perm_in", perm_in.long())
         self.register_buffer("perm_out", perm_out.long())
-        # Precompute the inverse of perm_out to avoid argsort on every forward call.
-        inv = torch.empty_like(perm_out)
-        inv[perm_out] = torch.arange(out_features, device=perm_out.device)
-        self.register_buffer("inv_perm_out", inv)
 
         if bias:
             self.bias = nn.Parameter(
@@ -168,11 +163,9 @@ class MonarchLinear(nn.Module):
         #    otherwise fall back to a loop over heterogeneous blocks.
         y = self._block_matmul(x)  # (batch, out_features)
 
-        # 3. Inverse-permute output columns:
-        # #    result[:, j] = y[:, inv_perm_out[j]]
-        # result = y[:, self.inv_perm_out]
-        #    result[:, j] = y[:, perm_out[j]]
-        result = y[:, self.perm_out]
+        # 3. Permute output columns (scatter: result[:, perm_out[i]] = y[:, i]):
+        result = torch.empty_like(y)
+        result[:, self.perm_out] = y
 
         # 4. Bias
         if self.bias is not None:
@@ -234,28 +227,29 @@ class MonarchLinear(nn.Module):
         # Build block-diagonal M from the trainable blocks.
         M = torch.block_diag(*list(self.blocks))  # (out_features, in_features)
 
-        # # S[perm_out[a], perm_in[b]] = M[a, b]  for all a, b.
-        # # Equivalently:
-        # #   step 1: permute rows    — S_temp[perm_out, :] = M
-        # #   step 2: permute columns — S[:, perm_in] = S_temp
-        # S_temp = torch.zeros(
-        #     self.out_features, self.in_features, device=M.device, dtype=M.dtype
-        # )
-        # S_temp[self.perm_out] = M  # row a of M goes to row perm_out[a]
-
         # S[perm_out[a], perm_in[b]] = M[a, b]  for all a, b.
         # Equivalently:
-        #   step 1: permute rows    — S_temp[inv_perm_out, :] = M
+        #   step 1: permute rows    — S_temp[perm_out, :] = M
         #   step 2: permute columns — S[:, perm_in] = S_temp
         S_temp = torch.zeros(
             self.out_features, self.in_features, device=M.device, dtype=M.dtype
         )
-        S_temp[self.inv_perm_out] = M  # row a of M goes to row inv_perm_out[a]
+        S_temp[self.perm_out] = M  # row a of M goes to row perm_out[a]
 
         S = torch.zeros_like(S_temp)
         S[:, self.perm_in] = S_temp  # col b of S_temp goes to col perm_in[b]
 
         return S
+
+    def to_dense_slow(self) -> torch.Tensor:
+        # This is a straightforward but inefficient implementation of to_dense() that directly
+        # computes the permutation matrices P1 and P2 and does the full matmul. Useful for testing against to_dense().
+        M = torch.block_diag(*list(self.blocks))
+        P1 = torch.zeros(self.out_features, self.out_features, device=self.perm_out.device, dtype=M.dtype)
+        P1[self.perm_out, torch.arange(self.out_features)] = 1.0
+        P2 = torch.zeros(self.in_features, self.in_features, device=self.perm_in.device, dtype=M.dtype)
+        P2[torch.arange(self.in_features), self.perm_in] = 1.0
+        return P1 @ M @ P2
 
     def number_of_trainable_parameters(self) -> int:
         """Return the number of trainable scalar parameters (blocks + bias).

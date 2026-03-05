@@ -91,6 +91,12 @@ def test_forward_shape_unbatched():
     y = layer(x)
     assert y.shape == (16,)
 
+def test_to_dense_matches_to_dense_slow():
+    layer = make_simple_monarch(in_f=16, out_f=16)
+    S = layer.to_dense()
+    S_slow = layer.to_dense_slow()
+    assert torch.allclose(S, S_slow, atol=1e-5), \
+        f"to_dense mismatch: max diff {(S - S_slow).abs().max().item()}"
 
 # ---------------------------------------------------------------------------
 # Test 4: forward matches explicit dense computation
@@ -143,8 +149,6 @@ def test_gradient_flow():
     # Permutation buffers must never accumulate gradients
     assert layer.perm_in.grad is None
     assert layer.perm_out.grad is None
-    assert layer.inv_perm_out.grad is None
-
 
 # ---------------------------------------------------------------------------
 # Test 7: gradients match a dense nn.Linear with weight = to_dense()
@@ -168,7 +172,7 @@ def test_gradient_matches_dense():
     # then apply the same row/column permutation to get S_grad.
     M_grad = torch.block_diag(*[b.grad.clone() for b in layer.blocks])
     S_grad_temp = torch.zeros(layer.out_features, layer.in_features)
-    S_grad_temp[layer.inv_perm_out] = M_grad          # permute rows
+    S_grad_temp[layer.perm_out] = M_grad          # permute rows
     S_grad = torch.zeros_like(S_grad_temp)
     S_grad[:, layer.perm_in] = S_grad_temp        # permute columns
     monarch_bias_grad = layer.bias.grad.clone()
@@ -183,7 +187,7 @@ def test_gradient_matches_dense():
     for k in range(layer.num_blocks):
         bor = layer.block_out_features[k]
         bir = layer.block_in_features[k]
-        rows = layer.inv_perm_out[row_offset: row_offset + bor]
+        rows = layer.perm_out[row_offset: row_offset + bor]
         cols = layer.perm_in[col_offset: col_offset + bir]
         monarch_mask[rows[:, None], cols[None, :]] = True
         row_offset += bor
@@ -219,7 +223,7 @@ def test_optimizer_step():
     # Snapshot block values before step
     blocks_before = [b.data.clone() for b in layer.blocks]
     perm_in_before  = layer.perm_in.clone()
-    inv_perm_out_before = layer.inv_perm_out.clone()
+    perm_out_before = layer.perm_out.clone()
 
     optimizer = torch.optim.SGD(layer.parameters(), lr=0.1)
     x = torch.randn(8, 16)
@@ -233,7 +237,7 @@ def test_optimizer_step():
 
     # Permutations must be unchanged (they are buffers, not parameters)
     assert torch.equal(layer.perm_in, perm_in_before)
-    assert torch.equal(layer.inv_perm_out, inv_perm_out_before)
+    assert torch.equal(layer.perm_out, perm_out_before)
 
 
 # ---------------------------------------------------------------------------
