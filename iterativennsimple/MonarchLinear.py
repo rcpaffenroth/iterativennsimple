@@ -66,6 +66,7 @@ class MonarchLinear(nn.Module):
         perm_in: torch.Tensor,
         perm_out: torch.Tensor,
         bias: bool = True,
+        force_loop_matmul: bool = False,
         device=None,
         dtype=None,
     ) -> None:
@@ -98,6 +99,7 @@ class MonarchLinear(nn.Module):
         # are accessible. block sizes are small metadata; kept as Python lists.
         self.block_in_features: list[int] = list(block_in_features)
         self.block_out_features: list[int] = list(block_out_features)
+        self.force_loop_matmul: bool = force_loop_matmul
 
         # Trainable block weight matrices (each shape: (block_out_i, block_in_i))
         self.blocks = nn.ParameterList(
@@ -191,7 +193,7 @@ class MonarchLinear(nn.Module):
         batch = x.shape[0]
 
         # Fast path: all blocks have the same shape → single torch.bmm call.
-        if len(set(self.block_in_features)) == 1 and len(set(self.block_out_features)) == 1:
+        if not self.force_loop_matmul and len(set(self.block_in_features)) == 1 and len(set(self.block_out_features)) == 1:
             block_in = self.block_in_features[0]
             block_out = self.block_out_features[0]
             # x:  (batch, num_blocks * block_in)
