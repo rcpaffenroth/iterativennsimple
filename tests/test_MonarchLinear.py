@@ -98,6 +98,22 @@ def test_to_dense_matches_to_dense_slow():
     assert torch.allclose(S, S_slow, atol=1e-5), \
         f"to_dense mismatch: max diff {(S - S_slow).abs().max().item()}"
 
+
+def test_bmm_and_loop_matmul_agree():
+    """forward() with bmm fast path and loop path must produce identical results."""
+    x = torch.randn(8, 16)
+    layer_bmm = make_simple_monarch(in_f=16, out_f=16, seed=13)
+    # Build a loop-path layer with identical weights/permutations via state_dict.
+    layer_loop = MonarchLinear.from_uniform_blocks(
+        16, 16, num_blocks=4, force_loop_matmul=True, seed=13
+    )
+    layer_loop.load_state_dict(layer_bmm.state_dict())
+    y_bmm  = layer_bmm(x)
+    y_loop = layer_loop(x)
+    assert torch.allclose(y_bmm, y_loop, atol=1e-5), \
+        f"bmm vs loop mismatch: max diff {(y_bmm - y_loop).abs().max().item()}"
+
+
 # ---------------------------------------------------------------------------
 # Test 4: forward matches explicit dense computation
 # ---------------------------------------------------------------------------
