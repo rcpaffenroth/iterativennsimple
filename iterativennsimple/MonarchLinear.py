@@ -244,6 +244,7 @@ class MonarchLinear(nn.Module):
     def to_dense_slow(self) -> torch.Tensor:
         # This is a straightforward but inefficient implementation of to_dense() that directly
         # computes the permutation matrices P1 and P2 and does the full matmul. Useful for testing against to_dense().
+        # NOTE: Do not use in production code due to inefficiency.
         M = torch.block_diag(*list(self.blocks))
         P1 = torch.zeros(self.out_features, self.out_features, device=self.perm_out.device, dtype=M.dtype)
         P1[self.perm_out, torch.arange(self.out_features)] = 1.0
