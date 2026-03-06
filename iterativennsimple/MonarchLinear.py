@@ -160,14 +160,7 @@ class MonarchLinear(nn.Module):
 
         batch = input.shape[0]
 
-        if not use_views:
-            # Original path: full permute → block matmul → inverse-permute.
-            # Kept behind flag for testing / comparison.
-            x = input[:, self.perm_in]
-            y = self._block_matmul(x)
-            result = torch.empty_like(y)
-            result[:, self.perm_out] = y
-        else:
+        if use_views:
             # Memory-efficient path: fuse permutation with block matmul.
             # Instead of permuting the entire input (full-size copy), we gather
             # only the columns each block needs, matmul, then scatter the result
@@ -187,6 +180,13 @@ class MonarchLinear(nn.Module):
                 result[:, self.perm_out[out_off:out_off + bo]] = x_block @ self.blocks[i].T
                 in_off += bi
                 out_off += bo
+        else:
+            # Original path: full permute → block matmul → inverse-permute.
+            # Kept behind flag for testing / comparison.
+            x = input[:, self.perm_in]
+            y = self._block_matmul(x)
+            result = torch.empty_like(y)
+            result[:, self.perm_out] = y
 
         # Bias
         if self.bias is not None:
