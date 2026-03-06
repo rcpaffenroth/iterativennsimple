@@ -143,11 +143,12 @@ class MonarchLinear(nn.Module):
     # Forward
     # ------------------------------------------------------------------
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, use_views: bool = True) -> torch.Tensor:
         """Compute y = x S^T + b via permute → block matmul → inverse-permute.
 
         Args:
             input: Tensor of shape (batch, in_features) or (in_features,).
+            use_views: Whether to use memory-efficient view-based operations.
 
         Returns:
             Tensor of shape (batch, out_features) or (out_features,).
@@ -157,19 +158,37 @@ class MonarchLinear(nn.Module):
         if unbatched:
             input = input.unsqueeze(0)
 
-        # 1. Permute input columns
-        x = input[:, self.perm_in]  # (batch, in_features)
+        batch = input.shape[0]
 
-        # 2. Block-diagonal matmul
-        #    Use torch.bmm fast path when all blocks are the same size (common case),
-        #    otherwise fall back to a loop over heterogeneous blocks.
-        y = self._block_matmul(x)  # (batch, out_features)
+        if not use_views:
+            # Original path: full permute → block matmul → inverse-permute.
+            # Kept behind flag for testing / comparison.
+            x = input[:, self.perm_in]
+            y = self._block_matmul(x)
+            result = torch.empty_like(y)
+            result[:, self.perm_out] = y
+        else:
+            # Memory-efficient path: fuse permutation with block matmul.
+            # Instead of permuting the entire input (full-size copy), we gather
+            # only the columns each block needs, matmul, then scatter the result
+            # directly into the output tensor.  Intermediate tensors are
+            # block-sized and short-lived, avoiding two full-size copies.
+            result = torch.empty(batch, self.out_features,
+                                 device=input.device, dtype=input.dtype)
+            in_off = 0
+            out_off = 0
+            for i in range(self.num_blocks):
+                bi = self.block_in_features[i]
+                bo = self.block_out_features[i]
+                # perm_in[in_off:...] is a view (slice of a 1D buffer, no copy).
+                # input[:, idx] is a gather — copies only (batch, bi) elements.
+                x_block = input[:, self.perm_in[in_off:in_off + bi]]
+                # Write the block result directly into the correct output columns.
+                result[:, self.perm_out[out_off:out_off + bo]] = x_block @ self.blocks[i].T
+                in_off += bi
+                out_off += bo
 
-        # 3. Permute output columns (scatter: result[:, perm_out[i]] = y[:, i]):
-        result = torch.empty_like(y)
-        result[:, self.perm_out] = y
-
-        # 4. Bias
+        # Bias
         if self.bias is not None:
             result = result + self.bias
 

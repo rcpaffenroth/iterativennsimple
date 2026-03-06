@@ -99,6 +99,38 @@ def test_to_dense_matches_to_dense_slow():
         f"to_dense mismatch: max diff {(S - S_slow).abs().max().item()}"
 
 
+def test_forward_use_views_match():
+    """forward() with use_views=True and use_views=False must produce identical results."""
+    # Test with uniform blocks (batched input)
+    layer = make_simple_monarch(in_f=16, out_f=24, num_blocks=4, seed=42)
+    x_batched = torch.randn(8, 16)
+    y_with_views = layer(x_batched, use_views=True)
+    y_without_views = layer(x_batched, use_views=False)
+    assert torch.allclose(y_with_views, y_without_views, atol=1e-5), \
+        f"batched: max diff {(y_with_views - y_without_views).abs().max().item()}"
+
+    # Test with unbatched input (1D)
+    x_unbatched = torch.randn(16)
+    y_with_views = layer(x_unbatched, use_views=True)
+    y_without_views = layer(x_unbatched, use_views=False)
+    assert torch.allclose(y_with_views, y_without_views, atol=1e-5), \
+        f"unbatched: max diff {(y_with_views - y_without_views).abs().max().item()}"
+
+    # Test with non-uniform blocks
+    layer_nonuniform = MonarchLinear.from_block_config(
+        in_features=16,
+        out_features=16,
+        block_in_features=[4, 6, 6],
+        block_out_features=[5, 5, 6],
+        seed=43,
+    )
+    x = torch.randn(8, 16)
+    y_with_views = layer_nonuniform(x, use_views=True)
+    y_without_views = layer_nonuniform(x, use_views=False)
+    assert torch.allclose(y_with_views, y_without_views, atol=1e-5), \
+        f"non-uniform: max diff {(y_with_views - y_without_views).abs().max().item()}"
+
+
 def test_bmm_and_loop_matmul_agree():
     """forward() with bmm fast path and loop path must produce identical results."""
     x = torch.randn(8, 16)
