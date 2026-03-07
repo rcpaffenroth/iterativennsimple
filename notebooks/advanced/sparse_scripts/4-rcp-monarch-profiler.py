@@ -185,6 +185,7 @@ print("profile_layer() defined.")
 # ==============================================================================
 # 5. Run Profiler on MonarchLinear
 # ==============================================================================
+torch.cuda.memory._record_memory_history(max_entries=100000)
 
 # Print the current memory use on the device before starting the profiler (useful for debugging OOMs)
 if device.type == "cuda":
@@ -235,3 +236,5 @@ if device.type == "cuda":
 del layer, x_prof
 if device.type == "cuda":
     torch.cuda.empty_cache()
+torch.cuda.memory._dump_snapshot("mem_snapshot.pkl")
+torch.cuda.memory._record_memory_history(enabled=None)
