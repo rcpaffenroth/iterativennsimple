@@ -34,13 +34,13 @@ if device.type == "cuda":
 # 2. Configuration
 # ==============================================================================
 
-PROF_SCALE      = 4
-PROF_SIZE       = PROF_SCALE * 16 * 1024  # layer in_features / out_features
-PROF_BATCH      = 128                     # batch size
-PROF_NUM_BLOCKS = PROF_SCALE * 8          # Monarch blocks 
+PROF_BLOCK_SIZE = 256                      # size of each Monarch block (block_size x block_size)
+PROF_NUM_BLOCKS = 8*1024                      # number of blocks
+PROF_SIZE       = PROF_BLOCK_SIZE * PROF_NUM_BLOCKS  # total layer size: n x n
+PROF_BATCH      = 128                      # batch size
 PROF_WARMUP     = 5
 PROF_ITERS      = 20
-PROF_DTYPE      = torch.bfloat16          # set to None to keep float32, or try torch.float16
+PROF_DTYPE      = torch.bfloat16           # set to None to keep float32, or try torch.float16
 
 print(f"Layer size : {PROF_SIZE:,}  x  {PROF_SIZE:,}")
 print(f"Num blocks : {PROF_NUM_BLOCKS}")
@@ -225,12 +225,12 @@ if device.type == "cuda":
     mem_reserved = torch.cuda.memory_reserved(device)
     print(f"After profiling: allocated {_fmt(mem_alloc)}, reserved {_fmt(mem_reserved)}")
 
-print(
-    prof.key_averages().table(
-        sort_by=sort_key,
-        row_limit=20,
-    )
-)
+#print(
+#    prof.key_averages().table(
+#        sort_by=sort_key,
+#        row_limit=20,
+#    )
+#)
 
 del layer, x_prof
 if device.type == "cuda":
