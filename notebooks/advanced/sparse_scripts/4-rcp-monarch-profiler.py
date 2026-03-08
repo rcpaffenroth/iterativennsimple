@@ -34,8 +34,8 @@ if device.type == "cuda":
 # 2. Configuration
 # ==============================================================================
 
-PROF_BLOCK_SIZE = 256                      # size of each Monarch block (block_size x block_size)
-PROF_NUM_BLOCKS = 8*1024                      # number of blocks
+PROF_BLOCK_SIZE = 128                      # size of each Monarch block (block_size x block_size)
+PROF_NUM_BLOCKS = 32*1024                      # number of blocks
 PROF_SIZE       = PROF_BLOCK_SIZE * PROF_NUM_BLOCKS  # total layer size: n x n
 PROF_BATCH      = 128                      # batch size
 PROF_WARMUP     = 5
