@@ -235,6 +235,17 @@ class MonarchLinear(nn.Module):
     # Utilities
     # ------------------------------------------------------------------
 
+    def to_sparse_coo(self) -> torch.sparse.Tensor:
+        """Construct and return the equivalent sparse COO matrix S.
+
+        This is primarily for testing and debugging; not efficient for large layers.
+
+        Returns:
+            Sparse tensor of shape (out_features, in_features) with the same weights as the MonarchLinear.
+        """
+        S = self.to_dense()  # (out_features, in_features)
+        return S.to_sparse(layout=torch.sparse_coo)
+
     def to_dense(self) -> torch.Tensor:
         """Construct and return the full dense weight matrix S of shape (out_features, in_features).
 
@@ -356,7 +367,7 @@ class MonarchLinear(nn.Module):
         block_in_features: list[int],
         block_out_features: list[int],
         initialization_type: str | int = "kaiming",
-        bias: bool = True,
+        bias: bool = False,
         force_loop_matmul: bool = False,
         seed: int | None = None,
         device=None,
@@ -409,7 +420,7 @@ class MonarchLinear(nn.Module):
         out_features: int,
         num_blocks: int,
         initialization_type: str | int = "kaiming",
-        bias: bool = True,
+        bias: bool = False,
         force_loop_matmul: bool = False,
         seed: int | None = None,
         device=None,
@@ -462,7 +473,7 @@ class MonarchLinear(nn.Module):
         out_features: int,
         target_sparsity: float,
         initialization_type: str | int = "kaiming",
-        bias: bool = True,
+        bias: bool = False,
         force_loop_matmul: bool = False,
         seed: int | None = None,
         device=None,
@@ -525,6 +536,89 @@ class MonarchLinear(nn.Module):
             logger.warning(
                 f"target_sparsity={target_sparsity:.3f} not exactly achievable; "
                 f"using num_blocks={num_blocks} for achieved_sparsity={achieved_sparsity:.3f}"
+            )
+
+        return MonarchLinear.from_uniform_blocks(
+            in_features=in_features,
+            out_features=out_features,
+            num_blocks=num_blocks,
+            initialization_type=initialization_type,
+            bias=bias,
+            force_loop_matmul=force_loop_matmul,
+            seed=seed,
+            device=device,
+            dtype=dtype,
+        )
+
+    @staticmethod
+    def from_entry_target(
+        in_features: int,
+        out_features: int,
+        target_entries: int,
+        initialization_type: str | int = "kaiming",
+        bias: bool = False,
+        force_loop_matmul: bool = False,
+        seed: int | None = None,
+        device=None,
+        dtype=None,
+    ) -> "MonarchLinear":
+        """Create a MonarchLinear with approximately the desired number of trainable weight entries.
+
+        For uniform blocks of size (out_features/k) × (in_features/k):
+            entries = k * (out_features/k) * (in_features/k) = in_features * out_features / k
+            →  k = round(in_features * out_features / target_entries)
+
+        The nearest k that divides both in_features and out_features is selected;
+        a warning is logged if the achieved entry count differs substantially from
+        the target.
+
+        Args:
+            in_features:    Total input dimension.
+            out_features:   Total output dimension.
+            target_entries: Desired number of weight matrix entries (excluding bias).
+                            Must be in [1, in_features * out_features].
+            initialization_type: See from_block_config. Default "kaiming".
+            bias:    Whether to include a learnable bias.
+            seed:    Optional seed for reproducible permutations.
+            device:  Target device.
+            dtype:   Target dtype.
+
+        Returns:
+            A MonarchLinear instance.
+
+        Raises:
+            ValueError: If target_entries is not in [1, in_features * out_features].
+        """
+        total = in_features * out_features
+        if not (1 <= target_entries <= total):
+            raise ValueError(
+                f"target_entries must be in [1, {total}], got {target_entries}"
+            )
+
+        # Ideal k: entries = total / k  →  k = total / target_entries
+        ideal_k = total / target_entries
+        ideal_k_int = max(1, round(ideal_k))
+
+        def is_valid(k: int) -> bool:
+            return in_features % k == 0 and out_features % k == 0
+
+        num_blocks = None
+        for delta in range(max(in_features, out_features)):
+            for candidate in [ideal_k_int + delta, ideal_k_int - delta]:
+                if candidate >= 1 and is_valid(candidate):
+                    num_blocks = candidate
+                    break
+            if num_blocks is not None:
+                break
+
+        if num_blocks is None:
+            num_blocks = 1
+
+        achieved_entries = total // num_blocks
+        if abs(achieved_entries - target_entries) > 0.05 * target_entries:
+            logger.warning(
+                f"target_entries={target_entries} not exactly achievable; "
+                f"using num_blocks={num_blocks} for achieved_entries={achieved_entries}"
             )
 
         return MonarchLinear.from_uniform_blocks(
