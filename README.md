@@ -41,9 +41,8 @@ The key insight: by sharing weights W and bias b across all layers, we create a 
 - **`Sequential2D.py`**: Main iterative network implementation supporting 2D problems
 - **`Sequential1D.py`**: Simplified 1D version for basic experimentation  
 - **`MaskedLinear.py`**: Linear layers with learnable masking for sparse connectivity
-- **`SparseLinear.py`**: Efficient sparse linear transformations
+- **`SparseLinear.py`**: DEPRECATED: Original sparse implementation using torch-sparse and torch-scatter (replaced by Monarch matrix)
 - **`bmatrix.py`**: Utilities for block matrix operations
-- **`utils/`**: Utility modules for data handling and processing
 
 ### Notebooks (`notebooks/`)
 
@@ -88,15 +87,29 @@ Apply iterative networks to real problems:
 
 ## Quick Start
 
-### 1. Environment Setup
-Open a terminal and run the setup script:
+### 1. Install uv
+If you don't have uv installed, install it first:
 ```bash
-scripts/post-create.sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### 2. Activate Python Environment
+### 2. Setup Python Environment
+Clone the repository and set up the Python environment:
 ```bash
-source venv/bin/activate
+git clone <repository-url>
+cd iterativennsimple
+uv sync
+```
+
+For development with additional testing tools:
+```bash
+uv sync --extra dev
+```
+
+### 3. Activate Python Environment
+Activate the virtual environment created by uv:
+```bash
+source .venv/bin/activate
 ```
 
 ### 3. Start with Core Notebooks
@@ -119,14 +132,14 @@ This repository prioritizes:
 - **Mathematical Rigor**: Precise connections between theory and implementation
 - **Educational Clarity**: Clear progression from basic concepts to advanced applications
 - **Reproducibility**: All results are tested and verified
-- **Modern Tools**: Uses contemporary Python ML stack (PyTorch, Plotly, Poetry)
+- **Modern Tools**: Uses contemporary Python ML stack (PyTorch, Plotly, uv)
 
 ## Modern Dependencies
 
 The project uses cutting-edge tools:
 - **PyTorch 2.5+**: Latest deep learning framework
 - **Plotly 5.24+**: Interactive visualizations
-- **Poetry**: Modern Python dependency management
+- **uv**: Fast Python package and environment management
 - **Weights & Biases**: Experiment tracking and visualization
 - **pytest + nbmake**: Automated notebook testing
 

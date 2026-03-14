@@ -1,3 +1,10 @@
+## [v0.4.0] - TBD
+- Version bump from 0.3.1 to 0.4.0
+- Implemented sparse monarch matrix
+- Removed torch-sparse and torch-scatter dependencies.  At the end of the day, on a GPU, these were significantly slower that MaskedLinear, and they were causing a lot of installation issues.  The new implementation is still sparse, but it is based on the Monarch matrix format, which is a custom sparse format that we developed for this project.  
+- Moved to uv
+- Protect main with github actions
+
 ## [v0.3.1] - 3-2-2026
 - Version bump from 0.3.0 to 0.3.1
 - Added `scikit-learn = 1.6.*` dependency

@@ -1,40 +1,53 @@
 # Notes for developers
 
-## Defaults
-See .devcontainer/devcontainer.json for the defaults.  This can 
-automatically install python packages, run scripts, install extensions, etc.
+## Environment Setup
 
-## How to use
+This project uses **uv** for fast, reliable Python dependency management. The configuration is defined in `pyproject.toml`.
 
-If you are using this in Codespaces you can just run the following commands in the terminal:
+### DevContainer Defaults
+See `.devcontainer/devcontainer.json` for development environment defaults, which automatically installs Python packages, runs setup scripts, and installs VS Code extensions.
 
+## Installation
+
+### Option 1: GitHub Codespaces (Recommended)
+If using GitHub Codespaces, simply run:
 ```bash
-poetry shell
-poetry install --with dev
+uv sync --extra dev
+source .venv/bin/activate
 ```
 
-## pytorch and poetry
-To get poetry to install the correct version of pytorch you need to so something like this
+### Option 2: Local Development
+1. Install uv:
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
 
+2. Sync dependencies:
+   ```bash
+   uv sync --extra dev
+   source .venv/bin/activate
+   ```
+
+## Managing Dependencies with uv
+
+### Sync Development Environment
 ```bash
-# This adds the pytorch repo to the list of sources
-poetry source add -p explicit pytorch https://download.pytorch.org/whl/cpu
-# This uses the pytorch repo to install pytorch instead of the default
-poetry add --source pytorch torch torchvision
+# Install all dependencies including dev and test tools
+uv sync --extra dev
 ```
 
-## vscode and poetry
-You want the virtual environment to be local, so that vscode can find it.  The "--local" flag is the important part
-and will create the poetry.toml file that we can submit to git.
+### PyTorch Configuration
+PyTorch package index configuration is defined in `pyproject.toml` under `[tool.uv.sources]`. This ensures the correct PyTorch version is installed for your system.
+
+### VS Code Integration
+uv creates a local `.venv` directory by default, which VS Code automatically discovers for Python intellisense and debugging.
+
+## Running Tests
 
 ```bash
-poetry config virtualenvs.in-project true --local
-```
+# Run all tests including notebook tests
+pytest
 
-## Generating test data
-To generate a local copy of the test data you can run the following command:
-
-```bash
-cd scripts
-python generate_data.py
+# Run specific test file
+pytest tests/test_Sequential2D.py
 ```

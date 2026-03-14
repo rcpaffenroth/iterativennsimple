@@ -1,6 +1,7 @@
 import torch
 
 from iterativennsimple.MaskedLinear import MaskedLinear
+from iterativennsimple.MonarchLinear import MonarchLinear
 from iterativennsimple.SparseLinear import SparseLinear
 from iterativennsimple.Sequential1D import Sequential1D
 
@@ -220,6 +221,34 @@ class Sequential2D(torch.nn.Module):
                                     cfg['block_kwargs'][i][j]['initialization_type'],
                                     bias = cfg['block_kwargs'][i][j]['bias'],
                                 )
+                elif block_type == 'MonarchLinear.from_uniform_blocks':
+                    block = MonarchLinear.from_uniform_blocks(
+                        in_features=in_features_list[i],
+                        out_features=out_features_list[j],
+                        num_blocks=cfg['block_kwargs'][i][j]['num_blocks'],
+                        initialization_type=cfg['block_kwargs'][i][j].get('initialization_type', 'kaiming'),
+                        bias=cfg['block_kwargs'][i][j].get('bias', True),
+                        seed=cfg['block_kwargs'][i][j].get('seed', None),
+                    )
+                elif block_type == 'MonarchLinear.from_block_config':
+                    block = MonarchLinear.from_block_config(
+                        in_features=in_features_list[i],
+                        out_features=out_features_list[j],
+                        block_in_features=cfg['block_kwargs'][i][j]['block_in_features'],
+                        block_out_features=cfg['block_kwargs'][i][j]['block_out_features'],
+                        initialization_type=cfg['block_kwargs'][i][j].get('initialization_type', 'kaiming'),
+                        bias=cfg['block_kwargs'][i][j].get('bias', True),
+                        seed=cfg['block_kwargs'][i][j].get('seed', None),
+                    )
+                elif block_type == 'MonarchLinear.from_sparsity_target':
+                    block = MonarchLinear.from_sparsity_target(
+                        in_features=in_features_list[i],
+                        out_features=out_features_list[j],
+                        target_sparsity=cfg['block_kwargs'][i][j]['target_sparsity'],
+                        initialization_type=cfg['block_kwargs'][i][j].get('initialization_type', 'kaiming'),
+                        bias=cfg['block_kwargs'][i][j].get('bias', True),
+                        seed=cfg['block_kwargs'][i][j].get('seed', None),
+                    )
                 else:
                     raise ValueError(f"Unknown block type {block_type}")
                 

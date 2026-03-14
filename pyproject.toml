@@ -1,45 +1,37 @@
-[tool.poetry]
+[project]
 name = "iterativennsimple"
 version = "0.3.1"
 description = "A simple version of iterativenn to get people started"
-authors = ["Randy Paffenroth <rcpaffenroth@wpi.edu>"]
-license = "BSD 3-Clause License"
 readme = "README.md"
+requires-python = ">=3.10,<4.0"
+authors = [{ name = "Randy Paffenroth", email = "rcpaffenroth@wpi.edu" }]
+license = { text = "BSD 3-Clause License" }
+dependencies = [
+    "torch==2.5.1",
+    "torchvision==0.20.*",
+    "numpy==2.1.*",
+    "pandas==2.2.*",
+    "pyarrow==17.*",
+    "matplotlib==3.9.*",
+    "plotly==5.24.*",
+    "ipykernel==6.29.*",
+    "ipympl==0.9.*",
+    "jupyterlab==4.3.*",
+    "jupytext==1.17.*",
+    "nbconvert==7.16.*",
+    "scikit-learn==1.6.*",
+    "wandb==0.19.*",
+    "click==8.1.*",
+    "papermill==2.6.0",
+    "generatedata" 
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-# For the computational code
-torch = {version = "2.5.1", source = "pytorch"}
-torchvision = {version = "0.20.*", source = "pytorch"}
-numpy = "2.1.*"
-# For data
-pandas = "2.2.*"
-pyarrow = "17.*.*"
-# For the notebooks and vscode
-matplotlib = "3.9.*"
-plotly = "5.24.*"
-ipykernel = "6.29.*"
-ipympl = "0.9.*"
-jupyterlab = "4.3.*"
-jupytext = "1.17.*"
-nbconvert = "7.16.*"
-scikit-learn = "1.6.*"
-# wandb.ai
-wandb = "0.19.*"
-# Command line parsing
-click = "8.1.*"
-# Running jupyter notebooks in batch mode
-papermill = "2.6.0"
-# the generatedata from a github repo
-generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", branch = "release/v0.3.1" }
-
-[tool.poetry.group.dev]
-optional = true
-
-[tool.poetry.group.dev.dependencies]
-pytest = "8.3.*"
-pylint = "3.2.*"
-nbmake = "1.5.*"
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.*",
+    "pylint==3.2.*",
+    "nbmake==1.5.*",
+]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
@@ -48,23 +40,12 @@ testpaths = [
     "tests",
 ]
 
-[tool.poetry.group.sparse]
-optional = true
+[tool.uv.sources]
+generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", rev = "release/v0.3.2" }
 
-[tool.poetry.group.sparse.dependencies]
-torch-scatter = {version = "*", source="torch-sparse"}
-torch-sparse = {version = "*", source="torch-sparse"}
-
-[[tool.poetry.source]]
-name = "torch-sparse"
-url = "https://data.pyg.org/whl/torch-2.5.1+cu121.html"
-priority = "explicit"
-
-[[tool.poetry.source]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cu121"
-priority = "explicit"
+[tool.uv]
+default-groups = []
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

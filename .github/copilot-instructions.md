@@ -24,7 +24,7 @@
 - Do you not additional functionalities that are not needed for the current research focus
 
 ### Python Development
-- Use Poetry for dependency management (pyproject.toml)
+- Use uv for dependency and environment management (pyproject.toml + uv.lock)
 - Use type hints for better code clarity
 - Structure code for modularity and reusability
 - Follow PyTorch best practices for efficient tensor operations 
