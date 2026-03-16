@@ -41,7 +41,7 @@ testpaths = [
 ]
 
 [tool.uv.sources]
-generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", rev = "release/v0.3.2" }
+generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", rev = "release/v0.4.0" }
 
 [tool.uv]
 default-groups = []
