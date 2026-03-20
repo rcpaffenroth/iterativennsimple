@@ -37,7 +37,7 @@ PRESETS = {
         "batch_size":  256,
     },
     "medium": {
-        "h_sizes":     [8192, 8192],
+        "h_sizes":     [8192],
         "num_blocks":  8,
         "iterations":  5,
         "lstm_hidden": 0,
@@ -300,6 +300,7 @@ def train_and_eval(model, train_loader, val_loader, cfg, device,
     t0 = time.time()
 
     for epoch in range(1, cfg["epochs"] + 1):
+        t_epoch = time.time()
         tr_loss, tr_acc = _run_epoch(
             model, train_loader, optimizer, criterion, device,
             train=True, sup_steps=sup_steps,
@@ -308,13 +309,15 @@ def train_and_eval(model, train_loader, val_loader, cfg, device,
             model, val_loader, None, criterion, device,
             train=False, sup_steps=sup_steps,
             is_monarch=is_monarch, monarch_iters=cfg.get("iterations", 0))
+        epoch_s = time.time() - t_epoch
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             best_epoch   = epoch
 
         print(f"  [{label}] epoch {epoch:3d}/{cfg['epochs']}  "
-              f"loss={tr_loss:.4f}  train={tr_acc:.1f}%  val={val_acc:.2f}%")
+              f"loss={tr_loss:.4f}  train={tr_acc:.1f}%  val={val_acc:.2f}%  "
+              f"({epoch_s:.1f}s)")
 
     return best_val_acc, best_epoch, int(time.time() - t0)
 
