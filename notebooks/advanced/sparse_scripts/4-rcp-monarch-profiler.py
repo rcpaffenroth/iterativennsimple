@@ -47,12 +47,12 @@ def _fmt(nbytes: int) -> str:
 
 # Max for 4090 24Gb
 PROF_BLOCK_SIZE = 1024                      # size of each Monarch block (block_size x block_size)
-PROF_NUM_BLOCKS = 3*1024                        # number of blocks
+PROF_NUM_BLOCKS = 2*1024-500                        # number of blocks
 PROF_DENSE_BASELINE = False                    # whether to also profile a dense nn.Linear baseline (same size as MonarchLinear)
 
-# PROF_BLOCK_SIZE = 7*1024                      # size of each Monarch block (block_size x block_size)
+# PROF_BLOCK_SIZE = 8*1024                      # size of each Monarch block (block_size x block_size)
 # PROF_NUM_BLOCKS = 4                        # number of blocks
-# PROF_DENSE_BASELINE = True                    # whether to also profile a dense nn.Linear baseline (same size as MonarchLinear)
+# PROF_DENSE_BASELINE = False                    # whether to also profile a dense nn.Linear baseline (same size as MonarchLinear)
 
 PROF_SIZE       = PROF_BLOCK_SIZE * PROF_NUM_BLOCKS  # total layer size: n x n
 PROF_BATCH      = 128                      # batch size
