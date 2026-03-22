@@ -1,9 +1,12 @@
 import math
 import logging
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+
+if TYPE_CHECKING:
+    from iterativennsimple.MaskedLinear import MaskedLinear
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +275,40 @@ class MonarchLinear(nn.Module):
         S[:, self.perm_in] = S_temp  # col b of S_temp goes to col perm_in[b]
 
         return S
+
+    def to_MaskedLinear(self) -> "MaskedLinear":
+        """Convert this MonarchLinear to an equivalent MaskedLinear.
+
+        Extracts the dense weight matrix S = P1 @ M @ P2, then constructs a
+        MaskedLinear whose fixed ``weight_0`` equals S, whose ``mask`` reflects
+        the non-zero sparsity pattern of S, and whose trainable update ``U`` is
+        initialised to zero so that the two layers are numerically equivalent at
+        construction time.
+
+        Returns:
+            A MaskedLinear with the same in_features, out_features, and bias.
+        """
+        from iterativennsimple.MaskedLinear import MaskedLinear  # local import avoids circular dependency
+
+        S = self.to_dense()  # (out_features, in_features)
+
+        has_bias = self.bias is not None
+        masked = MaskedLinear(
+            in_features=self.in_features,
+            out_features=self.out_features,
+            bias=has_bias,
+            device=S.device,
+            dtype=S.dtype,
+        )
+
+        with torch.no_grad():
+            masked.weight_0.copy_(S)
+            masked.mask.copy_((S != 0).to(S.dtype))
+            masked.U.zero_()
+            if has_bias:
+                masked.bias.copy_(self.bias)
+
+        return masked
 
     def to_dense_slow(self) -> torch.Tensor:
         # This is a straightforward but inefficient implementation of to_dense() that directly

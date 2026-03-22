@@ -440,6 +440,74 @@ def test_entry_target():
         MonarchLinear.from_entry_target(in_f, out_f, target_entries=total + 1)
 
 
+# ---------------------------------------------------------------------------
+# Test: to_MaskedLinear
+# ---------------------------------------------------------------------------
+
+def test_to_masked_linear_type():
+    """to_MaskedLinear returns a MaskedLinear instance."""
+    from iterativennsimple.MaskedLinear import MaskedLinear
+    layer = make_simple_monarch()
+    masked = layer.to_MaskedLinear()
+    assert isinstance(masked, MaskedLinear)
+
+
+def test_to_masked_linear_forward_matches():
+    """MaskedLinear produced by to_MaskedLinear gives identical outputs to MonarchLinear."""
+    layer = make_simple_monarch(bias=True)
+    masked = layer.to_MaskedLinear()
+    x = torch.randn(32, 16)
+    assert torch.allclose(layer(x), masked(x), atol=1e-5), \
+        f"max diff: {(layer(x) - masked(x)).abs().max().item()}"
+
+
+def test_to_masked_linear_no_bias():
+    """Works correctly when bias=False."""
+    layer = make_simple_monarch(bias=False)
+    masked = layer.to_MaskedLinear()
+    assert masked.bias is None
+    x = torch.randn(8, 16)
+    assert torch.allclose(layer(x), masked(x), atol=1e-5)
+
+
+def test_to_masked_linear_sparsity_pattern():
+    """The mask of the returned MaskedLinear matches the non-zero pattern of to_dense()."""
+    layer = make_simple_monarch()
+    masked = layer.to_MaskedLinear()
+    S = layer.to_dense()
+    expected_mask = (S != 0).to(S.dtype)
+    assert torch.equal(masked.mask, expected_mask)
+
+
+def test_to_masked_linear_weight_0():
+    """weight_0 of the returned MaskedLinear equals to_dense()."""
+    layer = make_simple_monarch()
+    masked = layer.to_MaskedLinear()
+    assert torch.allclose(masked.weight_0, layer.to_dense(), atol=1e-6)
+
+
+def test_to_masked_linear_u_is_zero():
+    """Trainable update U is initialised to zero."""
+    layer = make_simple_monarch()
+    masked = layer.to_MaskedLinear()
+    assert torch.all(masked.U == 0)
+
+
+def test_to_masked_linear_rectangular():
+    """to_MaskedLinear works for non-square (rectangular) layers."""
+    layer = MonarchLinear.from_uniform_blocks(32, 16, num_blocks=4, seed=7, bias=True)
+    masked = layer.to_MaskedLinear()
+    x = torch.randn(5, 32)
+    assert torch.allclose(layer(x), masked(x), atol=1e-5)
+
+
+def test_to_masked_linear_bias_values():
+    """Bias values are copied correctly."""
+    layer = make_simple_monarch(bias=True)
+    masked = layer.to_MaskedLinear()
+    assert torch.equal(masked.bias, layer.bias)
+
+
 def test_rectangular():
     # 32 inputs → 16 outputs, 4 blocks of (4 × 8)
     layer = MonarchLinear.from_uniform_blocks(32, 16, num_blocks=4, seed=11, bias=True)
