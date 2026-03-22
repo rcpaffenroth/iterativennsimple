@@ -122,4 +122,10 @@ h_{k+1} \\
 \end{bmatrix}
 $$
 
-divide this into tasks and create markdown files for each task in the tasks directory. Each markdown file should contain a sufficient explanation of the task to be handed to a simpler model to complete the task. 
+Put the simple example into a jupyter notebook format and include explanations for each step. The notebook should be called:
+
+notebooks/advanced/11-rcp-load-sequence-example.ipynb
+
+Divide this into tasks and create markdown files for each task in the tasks directory. Each markdown file should contain a sufficient explanation of the task to be handed to a simpler model to complete the task.
+
+Remember, keep it simple!  This notebook is intended to be an example of how to use the `load_data_as_sequence` function and compare different models, so the focus should be on clarity and simplicity rather than complex data or models. I want to be able to give this to a graduate student who is not an expert in pytorch.
