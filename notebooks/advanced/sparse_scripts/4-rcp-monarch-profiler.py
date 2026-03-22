@@ -14,6 +14,7 @@ Converted from: notebooks/advanced/8a-rcp-monarch-performance.ipynb
 
 import warnings
 
+import time
 import torch
 import torch.nn as nn
 from torch.profiler import ProfilerActivity, profile, record_function
@@ -28,25 +29,42 @@ if device.type == "cuda":
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     total_mem = torch.cuda.get_device_properties(0).total_memory
     print(f"Total GPU memory: {total_mem / 1024**3:.2f} GB")
+    # Print the total memory already allocated on the GPU before starting the profiler (useful for debugging OOMs)
+    mem_alloc = torch.cuda.memory_allocated(device)
+    mem_reserved = torch.cuda.memory_reserved(device)
+    print(f"Initial GPU memory: allocated {mem_alloc}, reserved {mem_reserved}")
 
+def _fmt(nbytes: int) -> str:
+    """Human-readable byte count: B / KB / MB / GB."""
+    for unit, thr in [("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)]:
+        if nbytes >= thr:
+            return f"{nbytes / thr:.2f} {unit}"
+    return f"{nbytes} B"
 
 # ==============================================================================
 # 2. Configuration
 # ==============================================================================
 
-PROF_BLOCK_SIZE = 128                      # size of each Monarch block (block_size x block_size)
-PROF_NUM_BLOCKS = 32*1024                      # number of blocks
+# Max for 4090 24Gb
+PROF_BLOCK_SIZE = 1024                      # size of each Monarch block (block_size x block_size)
+PROF_NUM_BLOCKS = 3*1024                        # number of blocks
+PROF_DENSE_BASELINE = False                    # whether to also profile a dense nn.Linear baseline (same size as MonarchLinear)
+
+# PROF_BLOCK_SIZE = 7*1024                      # size of each Monarch block (block_size x block_size)
+# PROF_NUM_BLOCKS = 4                        # number of blocks
+# PROF_DENSE_BASELINE = True                    # whether to also profile a dense nn.Linear baseline (same size as MonarchLinear)
+
 PROF_SIZE       = PROF_BLOCK_SIZE * PROF_NUM_BLOCKS  # total layer size: n x n
 PROF_BATCH      = 128                      # batch size
-PROF_WARMUP     = 5
-PROF_ITERS      = 20
+PROF_WARMUP     = 2
+PROF_ITERS      = 5
 PROF_DTYPE      = torch.bfloat16           # set to None to keep float32, or try torch.float16
 
 print(f"Layer size : {PROF_SIZE:,}  x  {PROF_SIZE:,}")
 print(f"Num blocks : {PROF_NUM_BLOCKS}")
 print(f"Batch size : {PROF_BATCH}")
 print(f"dtype      : {PROF_DTYPE}")
-
+print(f"Dense baseline : {PROF_DENSE_BASELINE}")
 
 # ==============================================================================
 # 3. First-Principles Memory Estimates
@@ -69,13 +87,6 @@ bs  = PROF_BATCH
 dense_params   = n * n
 monarch_params = n * n // k
 act_elements   = bs * n
-
-def _fmt(nbytes: int) -> str:
-    """Human-readable byte count: B / KB / MB / GB."""
-    for unit, thr in [("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)]:
-        if nbytes >= thr:
-            return f"{nbytes / thr:.2f} {unit}"
-    return f"{nbytes} B"
 
 print(f"dtype : {_dtype}  ({_bytes} bytes/element)")
 print(f"n     = {n:,}   k (num_blocks) = {k}   batch = {bs:,}")
@@ -110,11 +121,8 @@ print(f"  Rough peak (weights + grads + activations) - MonarchLinear: {_fmt(peak
 def profile_layer(
     layer: nn.Module,
     x: torch.Tensor,
-    layer_name: str = "layer",
-    warmup: int = 5,
-    iters: int = 20,
-    export_trace: bool = True,
-    dtype: torch.dtype | None = None,
+    warmup: int = 2,
+    iters: int = 5,
 ) -> "torch.profiler.profile":
     """Profile a single layer's forward + backward pass with the PyTorch profiler.
 
@@ -135,16 +143,6 @@ def profile_layer(
         The finished ``torch.profiler.profile`` object.
     """
     use_cuda = x.device.type == "cuda"
-    activities = [ProfilerActivity.CPU]
-    if use_cuda:
-        activities.append(ProfilerActivity.CUDA)
-
-    if dtype is not None:
-        layer = layer.to(dtype=dtype)
-        x = x.to(dtype=dtype)
-        dtype_name = str(dtype).replace("torch.", "")
-    else:
-        dtype_name = str(x.dtype).replace("torch.", "")
 
     # Warmup — run outside the profiler to avoid cold-start artefacts
     for _ in range(warmup):
@@ -156,30 +154,23 @@ def profile_layer(
     if use_cuda:
         torch.cuda.synchronize()
 
-    with profile(
-        activities=activities,
-        record_shapes=True,
-        profile_memory=True,
-        with_stack=False,
-    ) as prof:
-        for _ in range(iters):
-            with record_function(f"{layer_name}_fwd"):
-                y = layer(x)
-            with record_function(f"{layer_name}_bwd"):
-                y.sum().backward()
-            for p in layer.parameters():
-                if p.grad is not None:
-                    p.grad = None
+    iter_times = []
+    for _ in range(iters):
+        start_time = time.perf_counter()
+        y = layer(x)
+        y.sum().backward()
+        if use_cuda:
+            torch.cuda.synchronize()
+        end_time = time.perf_counter()
+        iter_time = end_time - start_time
+        print(f"Iter time: {iter_time:.4f} seconds")
+        for p in layer.parameters():
+            if p.grad is not None:
+                p.grad = None
+        iter_times.append(iter_time)
 
-    if export_trace:
-        trace_path = f"{layer_name}_{dtype_name}_trace.json"
-        prof.export_chrome_trace(trace_path)
-        print(f"  Chrome trace saved -> {trace_path}  (open in chrome://tracing or Perfetto)")
-
-    return prof
-
-
-print("profile_layer() defined.")
+    print(f"Average iteration time over {iters} iters: {sum(iter_times) / len(iter_times):.4f} seconds")
+    print(f"Standard deviation of iteration time: {torch.tensor(iter_times).std().item():.4f} seconds")
 
 
 # ==============================================================================
@@ -197,6 +188,8 @@ layer = MonarchLinear.from_uniform_blocks(
     PROF_SIZE, PROF_SIZE, num_blocks=PROF_NUM_BLOCKS, bias=True, seed=0, 
     force_loop_matmul=True
 ).to(device).train()
+if PROF_DENSE_BASELINE:
+    layer = layer.to_MaskedLinear()
 
 x_prof = torch.randn(PROF_BATCH, PROF_SIZE, device=device)
 
@@ -212,13 +205,10 @@ if device.type == "cuda":
     mem_reserved = torch.cuda.memory_reserved(device)
     print(f"Before profiling: allocated {_fmt(mem_alloc)}, reserved {_fmt(mem_reserved)}")
 
-prof = profile_layer(
+profile_layer(
     layer, x_prof,
-    layer_name="MonarchLinear",
     warmup=PROF_WARMUP,
     iters=PROF_ITERS,
-    export_trace=True,
-    dtype=PROF_DTYPE,
 )
 
 if device.type == "cuda":
@@ -226,15 +216,6 @@ if device.type == "cuda":
     mem_reserved = torch.cuda.memory_reserved(device)
     print(f"After profiling: allocated {_fmt(mem_alloc)}, reserved {_fmt(mem_reserved)}")
 
-#print(
-#    prof.key_averages().table(
-#        sort_by=sort_key,
-#        row_limit=20,
-#    )
-#)
-
 del layer, x_prof
 if device.type == "cuda":
     torch.cuda.empty_cache()
-torch.cuda.memory._dump_snapshot("mem_snapshot.pkl")
-torch.cuda.memory._record_memory_history(enabled=None)
