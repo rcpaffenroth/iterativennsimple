@@ -25,9 +25,9 @@ from iterativennsimple.MonarchLinear import MonarchLinear
 # Configuration
 # ============================================================================
 
-BLOCK_SIZES = [16, 32, 64, 128]
-NUM_BLOCKS_LIST = [4, 8, 16, 32]
-BATCH_SIZES = [32, 128]
+BLOCK_SIZES = [64, 128, 256, 512, 1024]
+NUM_BLOCKS_LIST = [4, 8, 16, 32, 64, 128]
+BATCH_SIZES = [64, 256, 1024]
 DTYPE = torch.float32
 WARMUP = 3
 ITERS = 10
@@ -79,10 +79,18 @@ def benchmark_one(layer, x, forward_fn=None, warmup=WARMUP, iters=ITERS):
     return avg, std
 
 
-def benchmark_one_cuda_graph(layer, x, forward_fn=None, warmup=WARMUP, iters=ITERS):
+def benchmark_one_cuda_graph(layer, x, forward_fn=None, warmup=WARMUP, iters=ITERS,
+                             use_make_graphed=False):
     """Time forward + backward using a captured CUDA graph. Returns avg ms per replay.
 
     The capture overhead is excluded from the reported timings.
+
+    Args:
+        use_make_graphed: If True, use torch.cuda.make_graphed_callables() instead
+            of raw CUDAGraph capture.  Required for layers whose backward pass uses
+            custom autograd Functions that launch kernels on separate CUDA streams
+            (e.g. Triton-based fused kernels), since raw graph capture cannot handle
+            cross-stream dependencies from the autograd engine.
     """
     if device.type != "cuda":
         raise RuntimeError("CUDA Graph benchmarking requires a CUDA device")
@@ -90,43 +98,92 @@ def benchmark_one_cuda_graph(layer, x, forward_fn=None, warmup=WARMUP, iters=ITE
     call = forward_fn if forward_fn is not None else layer
     static_x = x.detach().clone()
 
-    # Warm up eager execution first so parameter grads and kernels are initialized
-    # before capture. This avoids allocations during capture/replay.
-    warmup_stream = torch.cuda.Stream()
-    warmup_stream.wait_stream(torch.cuda.current_stream())
-    with torch.cuda.stream(warmup_stream):
-        for _ in range(warmup):
-            y = call(static_x)
-            y.sum().backward()
-            for p in layer.parameters():
-                if p.grad is not None:
-                    p.grad.zero_()
-    torch.cuda.current_stream().wait_stream(warmup_stream)
-    torch.cuda.synchronize()
+    if use_make_graphed:
+        # Use make_graphed_callables which properly captures forward and backward
+        # on the correct CUDA streams used by the autograd engine.  This avoids
+        # the "legacy stream depend on a capturing blocking stream" error that
+        # occurs when a custom torch.autograd.Function backward launches kernels
+        # (e.g. Triton kernels) during raw CUDAGraph capture.
 
-    graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
-        y = call(static_x)
+        # Wrapper module that holds the original layer as a submodule so its
+        # parameters are visible to make_graphed_callables for gradient capture.
+        class _Wrapper(nn.Module):
+            def __init__(self, layer_ref, fn):
+                super().__init__()
+                self.layer_ref = layer_ref  # registered submodule → parameters visible
+                self._fn = fn
+            def forward(self, inp):
+                return self._fn(inp)
+
+        wrapper = _Wrapper(layer, call)
+        sample = torch.randn_like(static_x)
+
+        graphed_module = torch.cuda.make_graphed_callables(
+            wrapper, (sample,), num_warmup_iters=warmup,
+        )
+
+        # One call to stabilise grads
+        y = graphed_module(static_x)
         y.sum().backward()
-
-    # One replay to ensure grads are materialized on their steady-state buffers.
-    graph.replay()
-    for p in layer.parameters():
-        if p.grad is not None:
-            p.grad.zero_()
-    torch.cuda.synchronize()
-
-    times = []
-    for _ in range(iters):
         for p in layer.parameters():
             if p.grad is not None:
                 p.grad.zero_()
         torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        graph.replay()
+
+        times = []
+        for _ in range(iters):
+            for p in layer.parameters():
+                if p.grad is not None:
+                    p.grad.zero_()
+            torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            y = graphed_module(static_x)
+            y.sum().backward()
+            torch.cuda.synchronize()
+            t1 = time.perf_counter()
+            times.append((t1 - t0) * 1000)
+
+    else:
+        # Raw CUDAGraph capture — works for standard PyTorch ops whose backward
+        # stays on the same stream, but NOT for custom autograd Functions that
+        # launch kernels on separate streams (e.g. Triton).
+        # Warm up eager execution first so parameter grads and kernels are initialized
+        # before capture. This avoids allocations during capture/replay.
+        warmup_stream = torch.cuda.Stream()
+        warmup_stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(warmup_stream):
+            for _ in range(warmup):
+                y = call(static_x)
+                y.sum().backward()
+                for p in layer.parameters():
+                    if p.grad is not None:
+                        p.grad.zero_()
+        torch.cuda.current_stream().wait_stream(warmup_stream)
         torch.cuda.synchronize()
-        t1 = time.perf_counter()
-        times.append((t1 - t0) * 1000)  # ms
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            y = call(static_x)
+            y.sum().backward()
+
+        # One replay to ensure grads are materialized on their steady-state buffers.
+        graph.replay()
+        for p in layer.parameters():
+            if p.grad is not None:
+                p.grad.zero_()
+        torch.cuda.synchronize()
+
+        times = []
+        for _ in range(iters):
+            for p in layer.parameters():
+                if p.grad is not None:
+                    p.grad.zero_()
+            torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            graph.replay()
+            torch.cuda.synchronize()
+            t1 = time.perf_counter()
+            times.append((t1 - t0) * 1000)  # ms
 
     avg = sum(times) / len(times)
     std = (sum((t - avg) ** 2 for t in times) / len(times)) ** 0.5
@@ -145,8 +202,8 @@ print(f"{'='*142}")
 
 for block_size, num_blocks, batch in itertools.product(BLOCK_SIZES, NUM_BLOCKS_LIST, BATCH_SIZES):
     n = block_size * num_blocks
-    # Skip very large layers that would OOM
-    if n > 8192:
+    # Skip very large layers that would OOM on 24GB VRAM
+    if n > 65536:
         continue
 
     x = torch.randn(batch, n, device=device, dtype=DTYPE)
@@ -220,6 +277,11 @@ for block_size, num_blocks, batch in itertools.product(BLOCK_SIZES, NUM_BLOCKS_L
         t_dense = float("inf")
 
     # --- Fused + CUDA Graph ---
+    # Uses make_graphed_callables because the fused Triton backward launches
+    # kernels via a custom autograd.Function, which conflicts with raw
+    # CUDAGraph stream capture (autograd engine dispatches backward on a
+    # separate internal stream, causing "legacy stream depend on capturing
+    # blocking stream" errors).
     try:
         if device.type != "cuda":
             raise RuntimeError("n/a")
@@ -230,6 +292,7 @@ for block_size, num_blocks, batch in itertools.product(BLOCK_SIZES, NUM_BLOCKS_L
             layer_fused_graph,
             x,
             forward_fn=lambda inp, _l=layer_fused_graph: _l(inp, use_fused=True),
+            use_make_graphed=True,
         )
         fused_graph_str = f"{t_fused_graph:8.3f}+-{s_fused_graph:.2f}"
     except Exception as e:

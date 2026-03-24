@@ -291,6 +291,12 @@ def _next_power_of_2(n: int) -> int:
     return max(16, 1 << (n - 1).bit_length())
 
 
+# Maximum tile dimension.  Keeping tiles at most 64 prevents shared-memory
+# overflow on consumer GPUs (e.g. RTX 4090 with 48-100 KB per SM).
+# With 64×64 tiles the kernel uses ≈48 KB of shmem (3 tiles × 64×64×4B).
+_MAX_TILE = 64
+
+
 class MonarchLinearFusedFn(torch.autograd.Function):
     """Custom autograd function that dispatches to fused Triton kernels."""
 
@@ -315,15 +321,21 @@ class MonarchLinearFusedFn(torch.autograd.Function):
             bias:         (out_features,) or None
             num_blocks, block_in, block_out: scalar metadata
         """
+        # Triton kernels use raw pointer arithmetic assuming contiguous layout.
+        # Ensure inputs are contiguous to avoid reading incorrect memory.
+        input = input.contiguous()
+        weight_stack = weight_stack.contiguous()
+
         batch, in_features = input.shape
         out_features = num_blocks * block_out
 
         output = torch.empty(batch, out_features, device=input.device, dtype=input.dtype)
 
-        # Tile sizes — use next power-of-2 of block dims (Triton requires pow2 for tl.dot)
-        BLOCK_K = _next_power_of_2(block_in)
-        BLOCK_N = _next_power_of_2(block_out)
-        BLOCK_BATCH = min(64, _next_power_of_2(batch))
+        # Tile sizes — use next power-of-2 of block dims (Triton requires pow2
+        # for tl.dot), capped at _MAX_TILE to stay within shared-memory limits.
+        BLOCK_K = min(_MAX_TILE, _next_power_of_2(block_in))
+        BLOCK_N = min(_MAX_TILE, _next_power_of_2(block_out))
+        BLOCK_BATCH = min(_MAX_TILE, _next_power_of_2(batch))
 
         grid = (
             num_blocks,
@@ -361,14 +373,22 @@ class MonarchLinearFusedFn(torch.autograd.Function):
         batch, in_features = input.shape
         out_features = num_blocks * block_out
 
+        # The Triton kernels address memory via raw pointer arithmetic
+        # (e.g. ptr + row * stride0 + col) and assume contiguous layout.
+        # PyTorch's autograd may pass non-contiguous grad_output (e.g. an
+        # expanded scalar with stride (0,0) from y.sum().backward()).
+        # Force contiguity so the kernels read the correct values.
+        grad_output = grad_output.contiguous()
+        input = input.contiguous()
+
         grad_input = torch.zeros_like(input)
         grad_weight = torch.zeros_like(weight_stack)
         grad_bias = None
 
         # --- grad_input kernel ---
-        BLOCK_K_gi = _next_power_of_2(block_out)
-        BLOCK_N_gi = _next_power_of_2(block_in)
-        BLOCK_BATCH_gi = min(64, _next_power_of_2(batch))
+        BLOCK_K_gi = min(_MAX_TILE, _next_power_of_2(block_out))
+        BLOCK_N_gi = min(_MAX_TILE, _next_power_of_2(block_in))
+        BLOCK_BATCH_gi = min(_MAX_TILE, _next_power_of_2(batch))
 
         grid_gi = (
             num_blocks,
@@ -389,9 +409,9 @@ class MonarchLinearFusedFn(torch.autograd.Function):
         )
 
         # --- grad_weight kernel ---
-        BLOCK_BATCH_gw = min(64, _next_power_of_2(batch))
-        BLOCK_M_gw = _next_power_of_2(block_out)
-        BLOCK_N_gw = _next_power_of_2(block_in)
+        BLOCK_BATCH_gw = min(_MAX_TILE, _next_power_of_2(batch))
+        BLOCK_M_gw = min(_MAX_TILE, _next_power_of_2(block_out))
+        BLOCK_N_gw = min(_MAX_TILE, _next_power_of_2(block_in))
 
         grid_gw = (
             num_blocks,
