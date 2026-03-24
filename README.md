@@ -1,3 +1,6 @@
+> > [!WARNING]
+> DONT USE THIS IMPLEMENTATION! THIS IS ABOUT AS EARLY AS IT GETS! 
+
 # Iterative Neural Networks (Simple)
 
 A streamlined implementation exploring the connection between neural networks and dynamical systems through weight sharing and iterative architectures.
