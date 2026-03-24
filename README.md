@@ -1,4 +1,4 @@
-> > [!WARNING]
+> [!WARNING]
 > DONT USE THIS IMPLEMENTATION! THIS IS ABOUT AS EARLY AS IT GETS! 
 
 # Iterative Neural Networks (Simple)
