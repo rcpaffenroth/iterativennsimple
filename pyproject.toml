@@ -32,6 +32,9 @@ dev = [
     "pylint==3.2.*",
     "nbmake==1.5.*",
 ]
+cuda = [
+    "triton>=3.0.0",
+]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

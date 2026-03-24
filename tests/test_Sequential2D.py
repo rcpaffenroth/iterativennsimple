@@ -380,10 +380,9 @@ def test_sequential2D_monarch_parameter_count():
     """Verify trainable parameter count for a 1×1 MonarchLinear grid."""
     num_blocks = 4
     in_out = 64
+    # Each block: (in_out/num_blocks) * (in_out/num_blocks) weights + in_out biases
     block_size = in_out // num_blocks
-    # 4 = 2^2 → factored mode: 2 factor matrices of (block_size × block_size) + bias
-    num_factors = 2
-    expected = num_factors * block_size * block_size + in_out  # factors + bias
+    expected = num_blocks * block_size * block_size + in_out  # weights + bias
 
     cfg = {
         "in_features_list": [in_out],

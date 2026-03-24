@@ -204,11 +204,9 @@ def test_gradient_flow():
 
 def test_gradient_matches_dense():
     torch.manual_seed(0)
-    # Use num_blocks=3 (not a perfect power) to avoid factored mode,
-    # since this test reconstructs S_grad from individual block gradients.
-    layer = MonarchLinear.from_uniform_blocks(18, 18, num_blocks=3, bias=True, seed=3)
-    x = torch.randn(8, 18)
-    target = torch.randn(8, 18)
+    layer = make_simple_monarch(in_f=16, out_f=16, seed=3)
+    x = torch.randn(8, 16)
+    target = torch.randn(8, 16)
 
     # --- MonarchLinear backward ---
     y_monarch = layer(x)
@@ -244,9 +242,8 @@ def test_gradient_matches_dense():
         col_offset += bir
 
     # --- Equivalent dense nn.Linear backward with the same effective S ---
-    n = layer.in_features
     S = layer.to_dense().detach()
-    dense = nn.Linear(n, n, bias=True)
+    dense = nn.Linear(16, 16, bias=True)
     with torch.no_grad():
         dense.weight.copy_(S)
         dense.bias.copy_(layer.bias.detach())
@@ -344,20 +341,13 @@ def test_to_device():
 # ---------------------------------------------------------------------------
 
 def test_number_of_trainable_parameters():
-    # 4 blocks of 4×4 with square features → factored (2 factors, order 2).
-    # Stored params: 2 factors × 4×4 = 32, plus bias 16 → 48.
+    # 4 blocks, each 4×4 = 16 params, plus bias of length 16 → total 80
     layer = make_simple_monarch(in_f=16, out_f=16, num_blocks=4, bias=True)
-    assert layer.num_factors == 2  # factored: 4 = 2^2
-    assert layer.number_of_trainable_parameters() == 2 * 4 * 4 + 16
+    assert layer.number_of_trainable_parameters() == 4 * 4 * 4 + 16
 
     # Without bias
     layer_nb = make_simple_monarch(in_f=16, out_f=16, num_blocks=4, bias=False)
-    assert layer_nb.number_of_trainable_parameters() == 2 * 4 * 4
-
-    # Non-factorable: 3 blocks (not a perfect power) — independent blocks.
-    layer_nf = MonarchLinear.from_uniform_blocks(18, 18, num_blocks=3, bias=True, seed=0)
-    assert layer_nf.num_factors is None
-    assert layer_nf.number_of_trainable_parameters() == 3 * 6 * 6 + 18
+    assert layer_nb.number_of_trainable_parameters() == 4 * 4 * 4
 
 
 # ---------------------------------------------------------------------------
@@ -428,14 +418,12 @@ def test_entry_target():
     in_f, out_f = 256, 256
     total = in_f * out_f  # 65536
 
-    # Ask for 1/4 of all entries → k=4 → 16384 effective non-zero entries.
-    # (number_of_trainable_parameters reports stored params, which may be
-    #  fewer when factored; count non-zeros in the dense matrix instead.)
+    # Ask for 1/4 of all entries → k=4 → 16384 entries
     target = total // 4
     layer = MonarchLinear.from_entry_target(in_f, out_f, target_entries=target, seed=3)
-    effective_entries = layer.to_dense().count_nonzero().item()
-    assert abs(effective_entries - target) <= 0.05 * target, \
-        f"achieved {effective_entries} effective entries, expected ~{target}"
+    achieved = layer.number_of_trainable_parameters()
+    assert abs(achieved - target) <= 0.05 * target, \
+        f"achieved {achieved} entries, expected ~{target}"
 
     # Exact match: target_entries == total → k=1 → dense layer
     layer_dense = MonarchLinear.from_entry_target(in_f, out_f, target_entries=total, seed=3)
@@ -534,74 +522,3 @@ def test_rectangular():
     y_dense = x @ S.T + layer.bias
     assert torch.allclose(y, y_dense, atol=1e-5), \
         f"rectangular: max diff {(y - y_dense).abs().max().item()}"
-
-
-# ---------------------------------------------------------------------------
-# Factored block-diagonal tests
-# ---------------------------------------------------------------------------
-
-def test_factored_memory_scaling():
-    """Factored mode stores n factor matrices, not n^k independent blocks."""
-    for num_blocks, exp_nf, exp_order in [(4, 2, 2), (8, 2, 3), (9, 3, 2), (16, 2, 4), (27, 3, 3)]:
-        d = 4
-        features = num_blocks * d
-        layer = MonarchLinear.from_uniform_blocks(features, features, num_blocks, seed=0)
-        assert layer.num_factors == exp_nf, \
-            f"num_blocks={num_blocks}: expected num_factors={exp_nf}, got {layer.num_factors}"
-        assert layer.product_order == exp_order, \
-            f"num_blocks={num_blocks}: expected product_order={exp_order}, got {layer.product_order}"
-        stored = layer.number_of_trainable_parameters()
-        expected = exp_nf * d * d  # only factor params, no bias
-        assert stored == expected, \
-            f"num_blocks={num_blocks}: expected {expected} stored params, got {stored}"
-
-
-def test_factored_forward_matches_dense():
-    """Forward output matches dense reconstruction for factored layers."""
-    for num_blocks in [4, 8, 9]:
-        d = 4
-        features = num_blocks * d
-        layer = MonarchLinear.from_uniform_blocks(features, features, num_blocks, bias=True, seed=7)
-        assert layer.num_factors is not None  # confirm factored mode
-
-        x = torch.randn(8, features)
-        y = layer(x)
-        S = layer.to_dense()
-        y_dense = x @ S.T + layer.bias
-        assert torch.allclose(y, y_dense, atol=1e-5), \
-            f"num_blocks={num_blocks}: max diff {(y - y_dense).abs().max().item()}"
-
-
-def test_factored_gradient_flow():
-    """Gradients reach factors (not blocks, which is empty in factored mode)."""
-    layer = MonarchLinear.from_uniform_blocks(16, 16, num_blocks=4, bias=True, seed=0)
-    assert layer.num_factors is not None
-    assert len(layer.blocks) == 0, "blocks should be empty in factored mode"
-
-    x = torch.randn(8, 16)
-    loss = layer(x).sum()
-    loss.backward()
-
-    for i, factor in enumerate(layer.factors):
-        assert factor.grad is not None, f"factor[{i}].grad is None"
-        assert factor.grad.shape == factor.shape
-    assert layer.bias.grad is not None
-    assert layer.perm_in.grad is None
-    assert layer.perm_out.grad is None
-
-
-def test_factored_not_applied_when_rectangular():
-    """Factored mode is not used for rectangular (non-square) blocks."""
-    layer = MonarchLinear.from_uniform_blocks(32, 16, num_blocks=4, seed=0)
-    assert layer.num_factors is None, "should not factor rectangular blocks"
-    assert len(layer.blocks) == 4
-
-
-def test_factored_not_applied_when_not_perfect_power():
-    """Factored mode is not used when num_blocks is not a perfect power."""
-    for num_blocks in [3, 5, 6, 7, 10]:
-        features = num_blocks * 4
-        layer = MonarchLinear.from_uniform_blocks(features, features, num_blocks, seed=0)
-        assert layer.num_factors is None, \
-            f"num_blocks={num_blocks}: should not factor (not a perfect power)"
-        assert len(layer.blocks) == num_blocks

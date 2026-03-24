@@ -1,4 +1,3 @@
-import itertools
 import math
 import logging
 from typing import Any, TYPE_CHECKING
@@ -61,25 +60,6 @@ class MonarchLinear(nn.Module):
     out_features: int
     num_blocks: int
 
-    @staticmethod
-    def _factorization(n: int) -> tuple[int, int] | None:
-        """Return (base, exponent) if n is a perfect power n = base^exp with base ≥ 2, exp ≥ 2.
-
-        Picks the smallest base (deepest factorization) for maximum memory savings.
-        E.g. 8→(2,3), 9→(3,2), 16→(2,4), 64→(2,6), 6→None.
-        """
-        if n < 4:
-            return None
-        for base in range(2, n):
-            if base * base > n:
-                break
-            exp = round(math.log(n) / math.log(base))
-            # Check neighbours to avoid floating-point drift.
-            for e in (exp, exp + 1, exp - 1):
-                if e >= 2 and base ** e == n:
-                    return (base, e)
-        return None
-
     def __init__(
         self,
         in_features: int,
@@ -124,36 +104,16 @@ class MonarchLinear(nn.Module):
         self.block_out_features: list[int] = list(block_out_features)
         self.force_loop_matmul: bool = force_loop_matmul
 
-        # When blocks are uniform and square, and num_blocks is a perfect power
-        # n^k, we store only n factor matrices and compose all n^k ordered
-        # products (AA, AB, BA, BB, ...) via non-commutative matmul.
-        factoring = None
-        if (len(set(block_in_features)) == 1
-                and len(set(block_out_features)) == 1
-                and block_in_features[0] == block_out_features[0]):
-            factoring = MonarchLinear._factorization(self.num_blocks)
-
-        if factoring is not None:
-            self.num_factors, self.product_order = factoring
-            d = block_in_features[0]
-            # Shared factor matrices — the actual trainable parameters.
-            self.factors = nn.ParameterList([
-                nn.Parameter(torch.empty(d, d, **factory_kwargs), requires_grad=True)
-                for _ in range(self.num_factors)
-            ])
-            self.blocks = nn.ParameterList()  # empty; blocks are computed on the fly
-        else:
-            self.num_factors = None
-            self.product_order = None
-            self.factors = nn.ParameterList()  # empty; standard independent blocks
-            # Trainable block weight matrices (each shape: (block_out_i, block_in_i))
-            self.blocks = nn.ParameterList([
+        # Trainable block weight matrices (each shape: (block_out_i, block_in_i))
+        self.blocks = nn.ParameterList(
+            [
                 nn.Parameter(
                     torch.empty(block_out_features[i], block_in_features[i], **factory_kwargs),
                     requires_grad=True,
                 )
                 for i in range(self.num_blocks)
-            ])
+            ]
+        )
 
         # Permutation index arrays — registered as buffers so they travel with
         # the module (.to(device), state_dict) but receive no gradients.
@@ -170,27 +130,6 @@ class MonarchLinear(nn.Module):
         self.reset_parameters()
 
     # ------------------------------------------------------------------
-    # Factored block computation
-    # ------------------------------------------------------------------
-
-    def _effective_blocks(self) -> list[torch.Tensor]:
-        """Return block matrices — computed from factors when factored, else stored directly.
-
-        In factored mode, generates all n^k ordered products of the n factor
-        matrices.  Each product is a differentiable chain of matmuls so
-        gradients flow back to the shared factors.
-        """
-        if self.num_factors is None:
-            return list(self.blocks)
-        products = []
-        for indices in itertools.product(range(self.num_factors), repeat=self.product_order):
-            result = self.factors[indices[0]]
-            for idx in indices[1:]:
-                result = result @ self.factors[idx]
-            products.append(result)
-        return products
-
-    # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
 
@@ -198,8 +137,6 @@ class MonarchLinear(nn.Module):
         """Re-initialise block weights (Kaiming uniform) and bias."""
         for block in self.blocks:
             nn.init.kaiming_uniform_(block, a=math.sqrt(5))
-        for factor in self.factors:
-            nn.init.kaiming_uniform_(factor, a=math.sqrt(5))
         if self.bias is not None:
             fan_in = self.in_features
             bound = 1.0 / math.sqrt(fan_in) if fan_in > 0 else 0.0
@@ -209,12 +146,15 @@ class MonarchLinear(nn.Module):
     # Forward
     # ------------------------------------------------------------------
 
-    def forward(self, input: torch.Tensor, use_views: bool = True) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, use_views: bool = True,
+                use_fused: bool | None = None) -> torch.Tensor:
         """Compute y = x S^T + b via permute → block matmul → inverse-permute.
 
         Args:
             input: Tensor of shape (batch, in_features) or (in_features,).
             use_views: Whether to use memory-efficient view-based operations.
+            use_fused: If True, use the fused Triton kernel (requires CUDA + Triton).
+                       If None, auto-detect.  If False, use the pure-PyTorch path.
 
         Returns:
             Tensor of shape (batch, out_features) or (out_features,).
@@ -226,13 +166,25 @@ class MonarchLinear(nn.Module):
 
         batch = input.shape[0]
 
-        if use_views:
+        if use_fused is None:
+            use_fused = self._can_use_fused(input)
+
+        if use_fused:
+            from iterativennsimple.monarch_kernels import monarch_linear_fused
+
+            W = torch.stack(list(self.blocks))  # (K, block_out, block_in)
+            result = monarch_linear_fused(
+                input, W, self.perm_in, self.perm_out, self.bias,
+                self.num_blocks,
+                self.block_in_features[0],
+                self.block_out_features[0],
+            )
+        elif use_views:
             # Memory-efficient path: fuse permutation with block matmul.
             # Instead of permuting the entire input (full-size copy), we gather
             # only the columns each block needs, matmul, then scatter the result
             # directly into the output tensor.  Intermediate tensors are
             # block-sized and short-lived, avoiding two full-size copies.
-            blocks = self._effective_blocks()
             result = torch.empty(batch, self.out_features,
                                  device=input.device, dtype=input.dtype)
             in_off = 0
@@ -244,9 +196,13 @@ class MonarchLinear(nn.Module):
                 # input[:, idx] is a gather — copies only (batch, bi) elements.
                 x_block = input[:, self.perm_in[in_off:in_off + bi]]
                 # Write the block result directly into the correct output columns.
-                result[:, self.perm_out[out_off:out_off + bo]] = x_block @ blocks[i].T
+                result[:, self.perm_out[out_off:out_off + bo]] = x_block @ self.blocks[i].T
                 in_off += bi
                 out_off += bo
+
+            # Bias
+            if self.bias is not None:
+                result = result + self.bias
         else:
             # Original path: full permute → block matmul → inverse-permute.
             # Kept behind flag for testing / comparison.
@@ -255,14 +211,29 @@ class MonarchLinear(nn.Module):
             result = torch.empty_like(y)
             result[:, self.perm_out] = y
 
-        # Bias
-        if self.bias is not None:
-            result = result + self.bias
+            # Bias
+            if self.bias is not None:
+                result = result + self.bias
 
         if unbatched:
             result = result.squeeze(0)
 
         return result
+
+    def _can_use_fused(self, input: torch.Tensor) -> bool:
+        """Return True if the fused Triton kernel path is available and applicable."""
+        if not input.is_cuda:
+            return False
+        if self.force_loop_matmul:
+            return False
+        # Uniform blocks only
+        if len(set(self.block_in_features)) != 1 or len(set(self.block_out_features)) != 1:
+            return False
+        try:
+            from iterativennsimple.monarch_kernels import triton_is_available
+            return triton_is_available()
+        except ImportError:
+            return False
 
     def _block_matmul(self, x: torch.Tensor) -> torch.Tensor:
         """Apply the block-diagonal M^T to x (already permuted).
@@ -277,7 +248,6 @@ class MonarchLinear(nn.Module):
             Tensor of shape (batch, out_features).
         """
         batch = x.shape[0]
-        blocks = self._effective_blocks()
 
         # Fast path: all blocks have the same shape → single torch.bmm call.
         if not self.force_loop_matmul and len(set(self.block_in_features)) == 1 and len(set(self.block_out_features)) == 1:
@@ -287,7 +257,7 @@ class MonarchLinear(nn.Module):
             # → (batch, num_blocks, block_in) → (num_blocks, batch, block_in)
             x_3d = x.reshape(batch, self.num_blocks, block_in).permute(1, 0, 2)
             # blocks: list of (block_out, block_in)  →  (num_blocks, block_out, block_in)
-            W_3d = torch.stack(blocks)
+            W_3d = torch.stack(list(self.blocks))
             # bmm: (num_blocks, batch, block_in) × (num_blocks, block_in, block_out)
             #    = (num_blocks, batch, block_out)
             y_3d = torch.bmm(x_3d, W_3d.transpose(1, 2))
@@ -296,7 +266,7 @@ class MonarchLinear(nn.Module):
 
         # General path: non-uniform block sizes — loop over blocks.
         parts = torch.split(x, self.block_in_features, dim=1)
-        out_parts = [part @ blocks[i].T for i, part in enumerate(parts)]
+        out_parts = [part @ self.blocks[i].T for i, part in enumerate(parts)]
         return torch.cat(out_parts, dim=1)
 
     # ------------------------------------------------------------------
@@ -324,8 +294,8 @@ class MonarchLinear(nn.Module):
         Returns:
             Tensor of shape (out_features, in_features).
         """
-        # Build block-diagonal M from the effective blocks.
-        M = torch.block_diag(*self._effective_blocks())  # (out_features, in_features)
+        # Build block-diagonal M from the trainable blocks.
+        M = torch.block_diag(*list(self.blocks))  # (out_features, in_features)
 
         # S[perm_out[a], perm_in[b]] = M[a, b]  for all a, b.
         # Equivalently:
@@ -379,7 +349,7 @@ class MonarchLinear(nn.Module):
         # This is a straightforward but inefficient implementation of to_dense() that directly
         # computes the permutation matrices P1 and P2 and does the full matmul. Useful for testing against to_dense().
         # NOTE: Do not use in production code due to inefficiency.
-        M = torch.block_diag(*self._effective_blocks())
+        M = torch.block_diag(*list(self.blocks))
         P1 = torch.zeros(self.out_features, self.out_features, device=self.perm_out.device, dtype=M.dtype)
         P1[self.perm_out, torch.arange(self.out_features)] = 1.0
         P2 = torch.zeros(self.in_features, self.in_features, device=self.perm_in.device, dtype=M.dtype)
@@ -387,28 +357,22 @@ class MonarchLinear(nn.Module):
         return P1 @ M @ P2
 
     def number_of_trainable_parameters(self) -> int:
-        """Return the number of trainable scalar parameters (blocks/factors + bias).
+        """Return the number of trainable scalar parameters (blocks + bias).
 
         This matches the interface expected by Sequential2D.number_of_trainable_parameters().
         """
-        # One of blocks/factors is always empty; sum both for simplicity.
         total = sum(b.numel() for b in self.blocks)
-        total += sum(f.numel() for f in self.factors)
         if self.bias is not None:
             total += self.out_features
         return total
 
     def extra_repr(self) -> str:
-        parts = [
-            f"in_features={self.in_features}",
-            f"out_features={self.out_features}",
-            f"num_blocks={self.num_blocks}",
-            f"bias={self.bias is not None}",
-        ]
-        if self.num_factors is not None:
-            parts.append(f"num_factors={self.num_factors}")
-            parts.append(f"product_order={self.product_order}")
-        return ", ".join(parts)
+        return (
+            f"in_features={self.in_features}, "
+            f"out_features={self.out_features}, "
+            f"num_blocks={self.num_blocks}, "
+            f"bias={self.bias is not None}"
+        )
 
     # ------------------------------------------------------------------
     # Factory functions
@@ -519,8 +483,6 @@ class MonarchLinear(nn.Module):
         if initialization_type != "kaiming":
             for block in layer.blocks:
                 MonarchLinear._initialize_block(block, initialization_type)
-            for factor in layer.factors:
-                MonarchLinear._initialize_block(factor, initialization_type)
 
         return layer
 
@@ -628,14 +590,9 @@ class MonarchLinear(nn.Module):
             return in_features % k == 0 and out_features % k == 0
 
         # Search outward from ideal_k_int for a valid divisor.
-        # Prefer factorable candidates (perfect powers) for memory savings.
         num_blocks = None
         for delta in range(max(in_features, out_features)):
-            candidates = sorted(
-                {ideal_k_int + delta, ideal_k_int - delta},
-                key=lambda c: (MonarchLinear._factorization(c) is None, c),
-            )
-            for candidate in candidates:
+            for candidate in [ideal_k_int + delta, ideal_k_int - delta]:
                 if candidate >= 1 and is_valid(candidate):
                     num_blocks = candidate
                     break
@@ -717,14 +674,9 @@ class MonarchLinear(nn.Module):
         def is_valid(k: int) -> bool:
             return in_features % k == 0 and out_features % k == 0
 
-        # Prefer factorable candidates (perfect powers) for memory savings.
         num_blocks = None
         for delta in range(max(in_features, out_features)):
-            candidates = sorted(
-                {ideal_k_int + delta, ideal_k_int - delta},
-                key=lambda c: (MonarchLinear._factorization(c) is None, c),
-            )
-            for candidate in candidates:
+            for candidate in [ideal_k_int + delta, ideal_k_int - delta]:
                 if candidate >= 1 and is_valid(candidate):
                     num_blocks = candidate
                     break
