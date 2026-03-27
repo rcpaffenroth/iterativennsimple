@@ -38,7 +38,7 @@ cuda = [
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "--nbmake"
+addopts = ""
 testpaths = [
     "tests",
 ]
