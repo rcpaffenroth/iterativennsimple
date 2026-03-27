@@ -1,1 +1,2 @@
 from iterativennsimple.MonarchLinear import MonarchLinear
+from iterativennsimple.LSLinear import LSLinear

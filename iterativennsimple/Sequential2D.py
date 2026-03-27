@@ -3,6 +3,7 @@ import torch
 from iterativennsimple.MaskedLinear import MaskedLinear
 from iterativennsimple.MonarchLinear import MonarchLinear
 from iterativennsimple.SparseLinear import SparseLinear
+from iterativennsimple.LSLinear import LSLinear
 from iterativennsimple.Sequential1D import Sequential1D
 
 class Identity(torch.nn.Module):
@@ -246,6 +247,27 @@ class Sequential2D(torch.nn.Module):
                         out_features=out_features_list[j],
                         target_sparsity=cfg['block_kwargs'][i][j]['target_sparsity'],
                         initialization_type=cfg['block_kwargs'][i][j].get('initialization_type', 'kaiming'),
+                        bias=cfg['block_kwargs'][i][j].get('bias', True),
+                        seed=cfg['block_kwargs'][i][j].get('seed', None),
+                    )
+                elif block_type == 'LSLinear.from_uniform_blocks':
+                    block = LSLinear.from_uniform_blocks(
+                        in_features=in_features_list[i],
+                        out_features=out_features_list[j],
+                        num_blocks=cfg['block_kwargs'][i][j]['num_blocks'],
+                        rank=cfg['block_kwargs'][i][j]['rank'],
+                        sparse_init=cfg['block_kwargs'][i][j].get('sparse_init', 'kaiming'),
+                        bias=cfg['block_kwargs'][i][j].get('bias', True),
+                        seed=cfg['block_kwargs'][i][j].get('seed', None),
+                    )
+                elif block_type == 'LSLinear.from_block_config':
+                    block = LSLinear.from_block_config(
+                        in_features=in_features_list[i],
+                        out_features=out_features_list[j],
+                        block_in_features=cfg['block_kwargs'][i][j]['block_in_features'],
+                        block_out_features=cfg['block_kwargs'][i][j]['block_out_features'],
+                        rank=cfg['block_kwargs'][i][j]['rank'],
+                        sparse_init=cfg['block_kwargs'][i][j].get('sparse_init', 'kaiming'),
                         bias=cfg['block_kwargs'][i][j].get('bias', True),
                         seed=cfg['block_kwargs'][i][j].get('seed', None),
                     )
