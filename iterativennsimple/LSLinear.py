@@ -133,17 +133,29 @@ class LSLinear(nn.Module):
         # MonarchLinear handles 1-D (unbatched) inputs internally.
         y = self.sparse(input, **sparse_kwargs)
 
-        # L path — low-rank: two small matmuls
-        #   (*, in) @ (in, r) -> (*, r) @ (r, out) -> (*, out)
-        low_rank = input @ self.B.T   # (*, rank)
-        low_rank = low_rank @ self.A.T  # (*, out)
+        # L path — low-rank: x @ B^T gives (*, rank), then fuse matmul+add
+        # using addmm to merge (low_rank @ A^T) + y into a single cuBLAS call,
+        # eliminating one element-wise kernel launch.
+        unbatched = input.dim() == 1
+        inp = input.unsqueeze(0) if unbatched else input
 
-        y = y + low_rank
+        low_rank = inp @ self.B.T  # (batch, rank)
+
+        if unbatched:
+            y_2d = y.unsqueeze(0)
+        else:
+            y_2d = y
+
+        # addmm: y_2d = 1.0 * (low_rank @ A^T) + 1.0 * y_2d
+        # Fuses matmul + element-wise add into one cuBLAS call.
+        y_2d = torch.addmm(y_2d, low_rank, self.A.T, beta=1.0, alpha=1.0)
 
         if self.bias is not None:
-            y = y + self.bias
+            y_2d = y_2d + self.bias
 
-        return y
+        if unbatched:
+            return y_2d.squeeze(0)
+        return y_2d
 
     # ------------------------------------------------------------------
     # Utilities

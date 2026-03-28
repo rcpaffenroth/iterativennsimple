@@ -2,7 +2,7 @@
 
 This module provides GPU-accelerated forward and backward passes for the
 Monarch matrix linear layer.  The kernels fuse the full
-permute → block-diagonal matmul → inverse-permute → bias pipeline into
+permute -> block-diagonal matmul -> inverse-permute -> bias pipeline into
 single kernel launches, eliminating intermediate global-memory traffic
 and Python-loop overhead.
 
@@ -10,7 +10,7 @@ Requirements:
     - NVIDIA GPU with CUDA
     - ``triton >= 3.0.0``  (ships with PyTorch 2.x on Linux)
 
-When Triton is not available the module can still be imported — the
+When Triton is not available the module can still be imported -- the
 public helpers simply return ``False`` / raise ``RuntimeError`` so that
 ``MonarchLinear`` falls back to its pure-PyTorch path.
 """
@@ -23,7 +23,7 @@ from typing import Optional
 import torch
 
 # ---------------------------------------------------------------------------
-# Lazy Triton import — keeps the package installable on CPU-only machines.
+# Lazy Triton import -- keeps the package installable on CPU-only machines.
 # ---------------------------------------------------------------------------
 try:
     import triton
@@ -40,11 +40,86 @@ def triton_is_available() -> bool:
 
 
 # =========================================================================== #
-#  Forward kernel                                                              #
+#  Autotuning configurations                                                   #
 # =========================================================================== #
+
+# Maximum tile dimension.  128 works on Ampere/Hopper GPUs with >=164KB
+# shared memory per SM.  The autotune will find optimal tile sizes.
+_MAX_TILE = 128
+
+
+def _next_power_of_2(n: int) -> int:
+    """Return the smallest power of 2 >= n (min 16 for Triton tl.dot)."""
+    return max(16, 1 << (n - 1).bit_length())
+
 
 if HAS_TRITON:
 
+    def _forward_configs():
+        """Curated autotuning configs for the forward kernel.
+
+        Tile memory budget: x_tile(BLOCK_BATCH × BLOCK_K) + w_tile(BLOCK_N × BLOCK_K)
+        + acc(BLOCK_BATCH × BLOCK_N).  Must fit in ~164KB shared memory on Ada/Ampere.
+        The 128×128 tiles (~192KB) exceed this, so we use asymmetric tiles for large
+        block sizes: BLOCK_K=64 with BLOCK_N=128 or vice versa.
+        """
+        return [
+            # Small tiles — best for block_in/out ≤ 32
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 16, "BLOCK_N": 16}, num_warps=2, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 16, "BLOCK_N": 16}, num_warps=4, num_stages=2),
+            # Medium tiles — sweet spot for 32-64 blocks
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 32, "BLOCK_N": 32}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 32, "BLOCK_N": 32}, num_warps=4, num_stages=3),
+            triton.Config({"BLOCK_BATCH": 128, "BLOCK_K": 32, "BLOCK_N": 32}, num_warps=4, num_stages=2),
+            # Large tiles — for block_in/out = 64-128
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 64, "BLOCK_N": 64}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 64, "BLOCK_N": 64}, num_warps=8, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 128, "BLOCK_K": 64, "BLOCK_N": 64}, num_warps=8, num_stages=2),
+            # Asymmetric tiles — for block_in=128 (loop K=64 twice, wide N)
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 64, "BLOCK_N": 128}, num_warps=8, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 64, "BLOCK_N": 128}, num_warps=8, num_stages=2),
+        ]
+
+    def _backward_input_configs():
+        """Curated autotuning configs for the backward input kernel."""
+        return [
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 16, "BLOCK_N": 16}, num_warps=2, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 16, "BLOCK_N": 16}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 32, "BLOCK_N": 32}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 32, "BLOCK_N": 32}, num_warps=4, num_stages=3),
+            triton.Config({"BLOCK_BATCH": 128, "BLOCK_K": 32, "BLOCK_N": 32}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 64, "BLOCK_N": 64}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 64, "BLOCK_N": 64}, num_warps=8, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 128, "BLOCK_K": 64, "BLOCK_N": 64}, num_warps=8, num_stages=2),
+            # Asymmetric: wide output tile, moderate K
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 64, "BLOCK_N": 128}, num_warps=8, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 64, "BLOCK_N": 128}, num_warps=8, num_stages=2),
+        ]
+
+    def _backward_weight_configs():
+        """Curated autotuning configs for the backward weight kernel."""
+        return [
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_M": 16, "BLOCK_N": 16}, num_warps=2, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_M": 16, "BLOCK_N": 16}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_M": 32, "BLOCK_N": 32}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_M": 32, "BLOCK_N": 32}, num_warps=4, num_stages=3),
+            triton.Config({"BLOCK_BATCH": 128, "BLOCK_M": 32, "BLOCK_N": 32}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_M": 64, "BLOCK_N": 64}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_M": 64, "BLOCK_N": 64}, num_warps=8, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 128, "BLOCK_M": 64, "BLOCK_N": 64}, num_warps=8, num_stages=2),
+            # Asymmetric: wide M (block_out), moderate N (block_in)
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_M": 128, "BLOCK_N": 64}, num_warps=8, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 128, "BLOCK_M": 64, "BLOCK_N": 128}, num_warps=8, num_stages=2),
+        ]
+
+    # =================================================================== #
+    #  Forward kernel                                                       #
+    # =================================================================== #
+
+    @triton.autotune(
+        configs=_forward_configs(),
+        key=["block_in", "block_out", "batch"],
+    )
     @triton.jit
     def _monarch_forward_kernel(
         # Pointers
@@ -61,14 +136,14 @@ if HAS_TRITON:
         block_in: tl.constexpr,
         block_out: tl.constexpr,
         num_blocks: tl.constexpr,
-        # Tile sizes (auto-tuned)
+        # Tile sizes (autotuned)
         BLOCK_BATCH: tl.constexpr,
         BLOCK_K: tl.constexpr,
         BLOCK_N: tl.constexpr,
         # Flags
         HAS_BIAS: tl.constexpr,
     ):
-        """Fused forward: permute → block matmul → inverse-permute → bias.
+        """Fused forward: permute -> block matmul -> inverse-permute -> bias.
 
         Grid: (num_blocks, cdiv(batch, BLOCK_BATCH), cdiv(block_out, BLOCK_N))
         """
@@ -108,7 +183,7 @@ if HAS_TRITON:
                 other=0.0,
             )
 
-            # w_tile: (BLOCK_N, BLOCK_K) — weight[block_id, out_local, k_offs]
+            # w_tile: (BLOCK_N, BLOCK_K) -- weight[block_id, out_local, k_offs]
             w_ptr_base = weight_ptr + block_id * block_out * block_in
             w_tile = tl.load(
                 w_ptr_base + out_local[:, None] * block_in + k_offs[None, :],
@@ -132,10 +207,14 @@ if HAS_TRITON:
             mask=batch_mask[:, None] & out_mask[None, :],
         )
 
-    # ----------------------------------------------------------------------- #
-    #  Backward kernel – grad_input                                            #
-    # ----------------------------------------------------------------------- #
+    # =================================================================== #
+    #  Backward kernel -- grad_input                                        #
+    # =================================================================== #
 
+    @triton.autotune(
+        configs=_backward_input_configs(),
+        key=["block_in", "block_out", "batch"],
+    )
     @triton.jit
     def _monarch_backward_input_kernel(
         # Pointers
@@ -151,7 +230,7 @@ if HAS_TRITON:
         block_in: tl.constexpr,
         block_out: tl.constexpr,
         num_blocks: tl.constexpr,
-        # Tile sizes
+        # Tile sizes (autotuned)
         BLOCK_BATCH: tl.constexpr,
         BLOCK_K: tl.constexpr,   # tile over block_out (the reduction dim)
         BLOCK_N: tl.constexpr,   # tile over block_in  (the output dim)
@@ -190,7 +269,7 @@ if HAS_TRITON:
                 other=0.0,
             )
 
-            # w_tile: (BLOCK_K, BLOCK_N) — W[block_id, k_offs, in_local]
+            # w_tile: (BLOCK_K, BLOCK_N) -- W[block_id, k_offs, in_local]
             w_ptr_base = weight_ptr + block_id * block_out * block_in
             w_tile = tl.load(
                 w_ptr_base + k_offs[:, None] * block_in + in_local[None, :],
@@ -208,10 +287,14 @@ if HAS_TRITON:
             mask=batch_mask[:, None] & in_mask[None, :],
         )
 
-    # ----------------------------------------------------------------------- #
-    #  Backward kernel – grad_weight                                           #
-    # ----------------------------------------------------------------------- #
+    # =================================================================== #
+    #  Backward kernel -- grad_weight                                       #
+    # =================================================================== #
 
+    @triton.autotune(
+        configs=_backward_weight_configs(),
+        key=["block_in", "block_out", "batch"],
+    )
     @triton.jit
     def _monarch_backward_weight_kernel(
         # Pointers
@@ -227,7 +310,7 @@ if HAS_TRITON:
         block_in: tl.constexpr,
         block_out: tl.constexpr,
         num_blocks: tl.constexpr,
-        # Tile sizes
+        # Tile sizes (autotuned)
         BLOCK_BATCH: tl.constexpr,
         BLOCK_M: tl.constexpr,  # tile over block_out
         BLOCK_N: tl.constexpr,  # tile over block_in
@@ -286,17 +369,6 @@ if HAS_TRITON:
 #  Autograd Function                                                           #
 # =========================================================================== #
 
-def _next_power_of_2(n: int) -> int:
-    """Return the smallest power of 2 >= n (min 16 for Triton tl.dot)."""
-    return max(16, 1 << (n - 1).bit_length())
-
-
-# Maximum tile dimension.  Keeping tiles at most 64 prevents shared-memory
-# overflow on consumer GPUs (e.g. RTX 4090 with 48-100 KB per SM).
-# With 64×64 tiles the kernel uses ≈48 KB of shmem (3 tiles × 64×64×4B).
-_MAX_TILE = 64
-
-
 class MonarchLinearFusedFn(torch.autograd.Function):
     """Custom autograd function that dispatches to fused Triton kernels."""
 
@@ -322,25 +394,21 @@ class MonarchLinearFusedFn(torch.autograd.Function):
             num_blocks, block_in, block_out: scalar metadata
         """
         # Triton kernels use raw pointer arithmetic assuming contiguous layout.
-        # Ensure inputs are contiguous to avoid reading incorrect memory.
-        input = input.contiguous()
-        weight_stack = weight_stack.contiguous()
+        if not input.is_contiguous():
+            input = input.contiguous()
+        if not weight_stack.is_contiguous():
+            weight_stack = weight_stack.contiguous()
 
         batch, in_features = input.shape
         out_features = num_blocks * block_out
 
         output = torch.empty(batch, out_features, device=input.device, dtype=input.dtype)
 
-        # Tile sizes — use next power-of-2 of block dims (Triton requires pow2
-        # for tl.dot), capped at _MAX_TILE to stay within shared-memory limits.
-        BLOCK_K = min(_MAX_TILE, _next_power_of_2(block_in))
-        BLOCK_N = min(_MAX_TILE, _next_power_of_2(block_out))
-        BLOCK_BATCH = min(_MAX_TILE, _next_power_of_2(batch))
-
-        grid = (
+        # Grid uses lambda for autotuned tile sizes.
+        grid = lambda META: (
             num_blocks,
-            math.ceil(batch / BLOCK_BATCH),
-            math.ceil(block_out / BLOCK_N),
+            math.ceil(batch / META["BLOCK_BATCH"]),
+            math.ceil(block_out / META["BLOCK_N"]),
         )
 
         _monarch_forward_kernel[grid](
@@ -351,9 +419,6 @@ class MonarchLinearFusedFn(torch.autograd.Function):
             block_in=block_in,
             block_out=block_out,
             num_blocks=num_blocks,
-            BLOCK_BATCH=BLOCK_BATCH,
-            BLOCK_K=BLOCK_K,
-            BLOCK_N=BLOCK_N,
             HAS_BIAS=bias is not None,
         )
 
@@ -373,27 +438,23 @@ class MonarchLinearFusedFn(torch.autograd.Function):
         batch, in_features = input.shape
         out_features = num_blocks * block_out
 
-        # The Triton kernels address memory via raw pointer arithmetic
-        # (e.g. ptr + row * stride0 + col) and assume contiguous layout.
-        # PyTorch's autograd may pass non-contiguous grad_output (e.g. an
-        # expanded scalar with stride (0,0) from y.sum().backward()).
-        # Force contiguity so the kernels read the correct values.
-        grad_output = grad_output.contiguous()
-        input = input.contiguous()
+        # Ensure contiguity for raw pointer arithmetic.
+        if not grad_output.is_contiguous():
+            grad_output = grad_output.contiguous()
+        if not input.is_contiguous():
+            input = input.contiguous()
 
-        grad_input = torch.zeros_like(input)
-        grad_weight = torch.zeros_like(weight_stack)
+        # For uniform blocks, every input/output column is written exactly once
+        # (the permutation is a bijection), so empty_like is safe (no memset).
+        grad_input = torch.empty_like(input)
+        grad_weight = torch.empty_like(weight_stack)
         grad_bias = None
 
         # --- grad_input kernel ---
-        BLOCK_K_gi = min(_MAX_TILE, _next_power_of_2(block_out))
-        BLOCK_N_gi = min(_MAX_TILE, _next_power_of_2(block_in))
-        BLOCK_BATCH_gi = min(_MAX_TILE, _next_power_of_2(batch))
-
-        grid_gi = (
+        grid_gi = lambda META: (
             num_blocks,
-            math.ceil(batch / BLOCK_BATCH_gi),
-            math.ceil(block_in / BLOCK_N_gi),
+            math.ceil(batch / META["BLOCK_BATCH"]),
+            math.ceil(block_in / META["BLOCK_N"]),
         )
 
         _monarch_backward_input_kernel[grid_gi](
@@ -403,20 +464,13 @@ class MonarchLinearFusedFn(torch.autograd.Function):
             block_in=block_in,
             block_out=block_out,
             num_blocks=num_blocks,
-            BLOCK_BATCH=BLOCK_BATCH_gi,
-            BLOCK_K=BLOCK_K_gi,
-            BLOCK_N=BLOCK_N_gi,
         )
 
         # --- grad_weight kernel ---
-        BLOCK_BATCH_gw = min(_MAX_TILE, _next_power_of_2(batch))
-        BLOCK_M_gw = min(_MAX_TILE, _next_power_of_2(block_out))
-        BLOCK_N_gw = min(_MAX_TILE, _next_power_of_2(block_in))
-
-        grid_gw = (
+        grid_gw = lambda META: (
             num_blocks,
-            math.ceil(block_out / BLOCK_M_gw),
-            math.ceil(block_in / BLOCK_N_gw),
+            math.ceil(block_out / META["BLOCK_M"]),
+            math.ceil(block_in / META["BLOCK_N"]),
         )
 
         _monarch_backward_weight_kernel[grid_gw](
@@ -426,9 +480,6 @@ class MonarchLinearFusedFn(torch.autograd.Function):
             block_in=block_in,
             block_out=block_out,
             num_blocks=num_blocks,
-            BLOCK_BATCH=BLOCK_BATCH_gw,
-            BLOCK_M=BLOCK_M_gw,
-            BLOCK_N=BLOCK_N_gw,
         )
 
         # --- grad_bias ---

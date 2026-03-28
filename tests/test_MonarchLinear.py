@@ -189,9 +189,10 @@ def test_gradient_flow():
     loss = layer(x).sum()
     loss.backward()
 
-    for i, block in enumerate(layer.blocks):
-        assert block.grad is not None, f"block[{i}].grad is None"
-        assert block.grad.shape == block.shape
+    for i in range(layer.num_blocks):
+        g = layer.block_grad(i)
+        assert g is not None, f"block_grad({i}) is None"
+        assert g.shape == layer.blocks[i].shape
 
     assert layer.bias.grad is not None
     # Permutation buffers must never accumulate gradients
@@ -218,7 +219,7 @@ def test_gradient_matches_dense():
     # so dL/dblocks[k][a,b] == dL/dS[perm_out[row_start+a], perm_in[col_start+b]].
     # The reconstruction below mirrors to_dense(): assemble M_grad as block-diag,
     # then apply the same row/column permutation to get S_grad.
-    M_grad = torch.block_diag(*[b.grad.clone() for b in layer.blocks])
+    M_grad = torch.block_diag(*[layer.block_grad(i).clone() for i in range(layer.num_blocks)])
     S_grad_temp = torch.zeros(layer.out_features, layer.in_features)
     S_grad_temp[layer.perm_out] = M_grad          # permute rows
     S_grad = torch.zeros_like(S_grad_temp)
@@ -269,7 +270,7 @@ def test_gradient_matches_dense():
 def test_optimizer_step():
     layer = make_simple_monarch(seed=99)
     # Snapshot block values before step
-    blocks_before = [b.data.clone() for b in layer.blocks]
+    blocks_before = [layer.blocks[i].data.clone() for i in range(layer.num_blocks)]
     perm_in_before  = layer.perm_in.clone()
     perm_out_before = layer.perm_out.clone()
 
@@ -280,8 +281,9 @@ def test_optimizer_step():
     optimizer.step()
 
     # Blocks must have changed
-    for i, (block, before) in enumerate(zip(layer.blocks, blocks_before)):
-        assert not torch.equal(block.data, before), f"block[{i}] unchanged after optimizer step"
+    for i in range(layer.num_blocks):
+        assert not torch.equal(layer.blocks[i].data, blocks_before[i]), \
+            f"block[{i}] unchanged after optimizer step"
 
     # Permutations must be unchanged (they are buffers, not parameters)
     assert torch.equal(layer.perm_in, perm_in_before)
@@ -333,7 +335,9 @@ def test_to_device():
     # Bring back to CPU and compare with CPU result
     y_cpu_via_gpu = y_gpu.cpu()
     y_cpu_direct  = layer_cpu(x_cpu)
-    assert torch.allclose(y_cpu_via_gpu, y_cpu_direct, atol=1e-5)
+    # TF32 tensor cores on Ampere/Ada GPUs reduce mantissa precision,
+    # so CPU vs GPU results differ by ~1e-3.
+    assert torch.allclose(y_cpu_via_gpu, y_cpu_direct, atol=2e-3)
 
 
 # ---------------------------------------------------------------------------

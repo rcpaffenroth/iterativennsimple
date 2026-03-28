@@ -205,8 +205,8 @@ def test_gradient_flow():
     assert layer.B.grad is not None, "B.grad is None"
     assert layer.bias.grad is not None, "bias.grad is None"
 
-    for i, block in enumerate(layer.sparse.blocks):
-        assert block.grad is not None, f"sparse.blocks[{i}].grad is None"
+    for i in range(layer.sparse.num_blocks):
+        assert layer.sparse.block_grad(i) is not None, f"sparse.block_grad({i}) is None"
 
     # Permutation buffers must never accumulate gradients
     assert layer.sparse.perm_in.grad is None
@@ -336,7 +336,7 @@ def test_optimizer_step():
 
     A_before = layer.A.data.clone()
     B_before = layer.B.data.clone()
-    blocks_before = [b.data.clone() for b in layer.sparse.blocks]
+    blocks_before = [layer.sparse.blocks[i].data.clone() for i in range(layer.sparse.num_blocks)]
     perm_in_before = layer.sparse.perm_in.clone()
     perm_out_before = layer.sparse.perm_out.clone()
 
@@ -359,8 +359,8 @@ def test_optimizer_step():
     assert not torch.equal(layer.B.data, B_before), "B unchanged after second optimizer step"
 
     # Sparse S blocks must also have changed
-    for i, (block, before) in enumerate(zip(layer.sparse.blocks, blocks_before)):
-        assert not torch.equal(block.data, before), \
+    for i in range(layer.sparse.num_blocks):
+        assert not torch.equal(layer.sparse.blocks[i].data, blocks_before[i]), \
             f"sparse.blocks[{i}] unchanged after optimizer step"
 
     # Permutations must not change (buffers, not parameters)

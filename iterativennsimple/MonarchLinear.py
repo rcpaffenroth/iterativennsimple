@@ -11,6 +11,36 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# ── Helper: list-like accessor for weight_stack slices ────────────────
+
+class _UniformBlockAccessor:
+    """List-like view into a contiguous (K, bo, bi) weight_stack Parameter.
+
+    Provides ``len()``, iteration, and indexing so that existing code
+    like ``for b in layer.blocks`` or ``layer.blocks[i]`` keeps working.
+    Each element is a 2-D tensor *view* into the underlying weight_stack;
+    mutations (e.g. ``nn.init.kaiming_uniform_``) write through.
+
+    For gradient access use ``layer.weight_stack.grad[i]`` directly, or the
+    convenience method ``layer.block_grad(i)``.
+    """
+
+    __slots__ = ("_ws",)
+
+    def __init__(self, weight_stack: nn.Parameter):
+        self._ws = weight_stack
+
+    def __len__(self) -> int:
+        return self._ws.shape[0]
+
+    def __getitem__(self, idx):
+        return self._ws[idx]
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self._ws[i]
+
+
 class MonarchLinear(nn.Module):
     """Sparse linear layer using the Monarch matrix format: S = P1 @ M @ P2.
 
@@ -25,6 +55,13 @@ class MonarchLinear(nn.Module):
 
     This avoids constructing S explicitly and leverages dense BLAS kernels
     on GPU, making it far more efficient than unstructured COO sparse layers.
+
+    For **uniform** blocks (the common case), all block weights are stored in
+    a single contiguous ``weight_stack`` Parameter of shape
+    ``(num_blocks, block_out, block_in)``.  This eliminates the per-forward
+    ``torch.stack()`` allocation that the old ``ParameterList`` design required.
+
+    For **non-uniform** blocks, a traditional ``ParameterList`` is used.
 
     Args:
         in_features:       Total input dimension.
@@ -42,7 +79,9 @@ class MonarchLinear(nn.Module):
         - Output: (*, out_features)
 
     Attributes:
-        blocks (nn.ParameterList): Trainable block weight tensors.
+        weight_stack (Parameter): For uniform blocks — shape (K, bo, bi).
+        blocks: List-like accessor for individual block tensors (views for
+                uniform blocks, ParameterList for non-uniform).
         perm_in  (Tensor): Input permutation buffer (not trainable).
         perm_out (Tensor): Output permutation buffer (not trainable).
         bias (Parameter or None): Learnable bias vector.
@@ -104,21 +143,37 @@ class MonarchLinear(nn.Module):
         self.block_out_features: list[int] = list(block_out_features)
         self.force_loop_matmul: bool = force_loop_matmul
 
-        # Trainable block weight matrices (each shape: (block_out_i, block_in_i))
-        self.blocks = nn.ParameterList(
-            [
-                nn.Parameter(
-                    torch.empty(block_out_features[i], block_in_features[i], **factory_kwargs),
-                    requires_grad=True,
-                )
-                for i in range(self.num_blocks)
-            ]
+        # Detect uniform blocks (the common, performance-critical case).
+        self._uniform: bool = (
+            len(set(block_in_features)) == 1 and len(set(block_out_features)) == 1
         )
+
+        if self._uniform:
+            # Single contiguous parameter — eliminates torch.stack() per forward.
+            bi = block_in_features[0]
+            bo = block_out_features[0]
+            self.weight_stack = nn.Parameter(
+                torch.empty(self.num_blocks, bo, bi, **factory_kwargs),
+                requires_grad=True,
+            )
+        else:
+            # Non-uniform blocks: use ParameterList (rare).
+            self._blocks = nn.ParameterList(
+                [
+                    nn.Parameter(
+                        torch.empty(block_out_features[i], block_in_features[i], **factory_kwargs),
+                        requires_grad=True,
+                    )
+                    for i in range(self.num_blocks)
+                ]
+            )
 
         # Permutation index arrays — registered as buffers so they travel with
         # the module (.to(device), state_dict) but receive no gradients.
-        self.register_buffer("perm_in", perm_in.long())
-        self.register_buffer("perm_out", perm_out.long())
+        # int32 permutations halve index bandwidth vs int64 on GPU.
+        # Max dim 2^31-1 is far more than any realistic layer size.
+        self.register_buffer("perm_in", perm_in.int())
+        self.register_buffer("perm_out", perm_out.int())
 
         if bias:
             self.bias = nn.Parameter(
@@ -128,6 +183,29 @@ class MonarchLinear(nn.Module):
             self.register_parameter("bias", None)
 
         self.reset_parameters()
+
+    # ------------------------------------------------------------------
+    # Block access
+    # ------------------------------------------------------------------
+
+    @property
+    def blocks(self):
+        """List-like access to individual block weight tensors.
+
+        For uniform blocks these are views into ``weight_stack``; for
+        non-uniform blocks they are the underlying ParameterList entries.
+        """
+        if self._uniform:
+            return _UniformBlockAccessor(self.weight_stack)
+        return self._blocks
+
+    def block_grad(self, i: int):
+        """Return the gradient tensor for block *i*, or None if unavailable."""
+        if self._uniform:
+            if self.weight_stack.grad is not None:
+                return self.weight_stack.grad[i]
+            return None
+        return self._blocks[i].grad
 
     # ------------------------------------------------------------------
     # Initialisation
@@ -146,15 +224,33 @@ class MonarchLinear(nn.Module):
     # Forward
     # ------------------------------------------------------------------
 
-    def forward(self, input: torch.Tensor, use_views: bool = True,
+    def forward(self, input: torch.Tensor, use_views: bool | None = None,
                 use_fused: bool | None = None) -> torch.Tensor:
-        """Compute y = x S^T + b via permute → block matmul → inverse-permute.
+        """Compute y = x S^T + b via permute -> block matmul -> inverse-permute.
+
+        Three compute paths, selected automatically when flags are left at None:
+
+        1. **Fused Triton** (``use_fused=True``):  Best when num_blocks ≥ 8 and
+           CUDA + Triton are available.  Fuses permute → block matmul → bias
+           into one kernel.
+        2. **BMM** (``use_views=False``): Best for uniform blocks on any device.
+           Single ``torch.bmm`` call — leverages cuBLAS heavily.
+        3. **Views** (``use_views=True``): Per-block gather/matmul/scatter loop.
+           Works for non-uniform blocks; slower for uniform blocks.
+
+        Auto-detection (all defaults):
+          - CUDA + Triton + uniform + ≥ 8 blocks → Fused
+          - Uniform blocks on any device           → BMM
+          - Non-uniform blocks                     → Views
 
         Args:
             input: Tensor of shape (batch, in_features) or (in_features,).
-            use_views: Whether to use memory-efficient view-based operations.
-            use_fused: If True, use the fused Triton kernel (requires CUDA + Triton).
-                       If None, auto-detect.  If False, use the pure-PyTorch path.
+            use_views: If True, force the gather/scatter view path.
+                       If False, force the BMM path.
+                       If None (default), auto-detect: BMM for uniform blocks,
+                       Views for non-uniform blocks.
+            use_fused: If True, force the fused Triton kernel (requires CUDA + Triton).
+                       If None, auto-detect.  If False, skip Triton.
 
         Returns:
             Tensor of shape (batch, out_features) or (out_features,).
@@ -169,22 +265,23 @@ class MonarchLinear(nn.Module):
         if use_fused is None:
             use_fused = self._can_use_fused(input)
 
+        # Auto-detect best non-fused path: BMM for uniform, Views for non-uniform.
+        if use_views is None:
+            use_views = not self._uniform
+
         if use_fused:
             from iterativennsimple.monarch_kernels import monarch_linear_fused
 
-            W = torch.stack(list(self.blocks))  # (K, block_out, block_in)
+            # weight_stack is already (K, block_out, block_in) — no allocation.
             result = monarch_linear_fused(
-                input, W, self.perm_in, self.perm_out, self.bias,
+                input, self.weight_stack, self.perm_in, self.perm_out, self.bias,
                 self.num_blocks,
                 self.block_in_features[0],
                 self.block_out_features[0],
             )
         elif use_views:
-            # Memory-efficient path: fuse permutation with block matmul.
-            # Instead of permuting the entire input (full-size copy), we gather
-            # only the columns each block needs, matmul, then scatter the result
-            # directly into the output tensor.  Intermediate tensors are
-            # block-sized and short-lived, avoiding two full-size copies.
+            # Gather/scatter path: per-block gather + matmul + scatter.
+            # Works for non-uniform blocks. For uniform blocks, BMM is faster.
             result = torch.empty(batch, self.out_features,
                                  device=input.device, dtype=input.dtype)
             in_off = 0
@@ -192,10 +289,7 @@ class MonarchLinear(nn.Module):
             for i in range(self.num_blocks):
                 bi = self.block_in_features[i]
                 bo = self.block_out_features[i]
-                # perm_in[in_off:...] is a view (slice of a 1D buffer, no copy).
-                # input[:, idx] is a gather — copies only (batch, bi) elements.
                 x_block = input[:, self.perm_in[in_off:in_off + bi]]
-                # Write the block result directly into the correct output columns.
                 result[:, self.perm_out[out_off:out_off + bo]] = x_block @ self.blocks[i].T
                 in_off += bi
                 out_off += bo
@@ -204,8 +298,8 @@ class MonarchLinear(nn.Module):
             if self.bias is not None:
                 result = result + self.bias
         else:
-            # Original path: full permute → block matmul → inverse-permute.
-            # Kept behind flag for testing / comparison.
+            # BMM path: full permute → torch.bmm → inverse-permute.
+            # Fast for uniform blocks; falls back to loop for non-uniform.
             x = input[:, self.perm_in]
             y = self._block_matmul(x)
             result = torch.empty_like(y)
@@ -221,13 +315,34 @@ class MonarchLinear(nn.Module):
         return result
 
     def _can_use_fused(self, input: torch.Tensor) -> bool:
-        """Return True if the fused Triton kernel path is available and applicable."""
+        """Return True if the fused Triton kernel path is preferred over BMM.
+
+        Heuristics (benchmarked on RTX 4090):
+          - Fused forward avoids the full-size permutation copies that BMM requires,
+            making it faster at small-to-medium batch sizes.
+          - However, the Fused backward (2 Triton kernel launches: grad_input +
+            grad_weight) is significantly slower than cuBLAS bmm backward for
+            large batch sizes (batch ≥ 256 with large block sizes).
+          - For few blocks (< 8), there isn't enough GPU parallelism for the
+            Triton grid, so BMM is always preferred.
+
+        The combined heuristic: use Fused only when num_blocks ≥ 8 AND the
+        batch-block product is small enough that our Triton backward isn't
+        bottlenecked.  For large batches, BMM wins on total F+B time.
+        """
         if not input.is_cuda:
             return False
         if self.force_loop_matmul:
             return False
-        # Uniform blocks only
-        if len(set(self.block_in_features)) != 1 or len(set(self.block_out_features)) != 1:
+        if not self._uniform:
+            return False
+        if self.num_blocks < 8:
+            return False
+        # At large batch × block_size, cuBLAS backward dominates our Triton
+        # backward kernels.  Threshold tuned on RTX 4090 benchmarks.
+        batch = input.shape[0]
+        block_size = self.block_in_features[0]
+        if batch * block_size > 65536:
             return False
         try:
             from iterativennsimple.monarch_kernels import triton_is_available
@@ -249,19 +364,19 @@ class MonarchLinear(nn.Module):
         """
         batch = x.shape[0]
 
-        # Fast path: all blocks have the same shape → single torch.bmm call.
-        if not self.force_loop_matmul and len(set(self.block_in_features)) == 1 and len(set(self.block_out_features)) == 1:
+        # Fast path: all blocks have the same shape -> single torch.bmm call.
+        if not self.force_loop_matmul and self._uniform:
             block_in = self.block_in_features[0]
             block_out = self.block_out_features[0]
             # x:  (batch, num_blocks * block_in)
-            # → (batch, num_blocks, block_in) → (num_blocks, batch, block_in)
+            # -> (batch, num_blocks, block_in) -> (num_blocks, batch, block_in)
             x_3d = x.reshape(batch, self.num_blocks, block_in).permute(1, 0, 2)
-            # blocks: list of (block_out, block_in)  →  (num_blocks, block_out, block_in)
-            W_3d = torch.stack(list(self.blocks))
-            # bmm: (num_blocks, batch, block_in) × (num_blocks, block_in, block_out)
+            # weight_stack is already (num_blocks, block_out, block_in) — no stack needed.
+            W_3d = self.weight_stack if self._uniform else torch.stack(list(self.blocks))
+            # bmm: (num_blocks, batch, block_in) x (num_blocks, block_in, block_out)
             #    = (num_blocks, batch, block_out)
             y_3d = torch.bmm(x_3d, W_3d.transpose(1, 2))
-            # → (batch, num_blocks, block_out) → (batch, num_blocks * block_out)
+            # -> (batch, num_blocks, block_out) -> (batch, num_blocks * block_out)
             return y_3d.permute(1, 0, 2).reshape(batch, self.out_features)
 
         # General path: non-uniform block sizes — loop over blocks.
@@ -361,7 +476,10 @@ class MonarchLinear(nn.Module):
 
         This matches the interface expected by Sequential2D.number_of_trainable_parameters().
         """
-        total = sum(b.numel() for b in self.blocks)
+        if self._uniform:
+            total = self.weight_stack.numel()
+        else:
+            total = sum(b.numel() for b in self._blocks)
         if self.bias is not None:
             total += self.out_features
         return total
@@ -393,7 +511,7 @@ class MonarchLinear(nn.Module):
         return gen
 
     @staticmethod
-    def _initialize_block(block: nn.Parameter, initialization_type: str | int | float) -> None:
+    def _initialize_block(block, initialization_type: str | int | float) -> None:
         """Initialize a block parameter in place according to initialization_type.
 
         Supported values (mirroring the conventions in MaskedLinear):
@@ -553,10 +671,10 @@ class MonarchLinear(nn.Module):
     ) -> "MonarchLinear":
         """Create a MonarchLinear with approximately the desired sparsity.
 
-        For uniform blocks of size (out_features/k) × (in_features/k):
+        For uniform blocks of size (out_features/k) x (in_features/k):
             density  = nnz / total = (k * out_features/k * in_features/k) / (out_features * in_features)
                      = 1 / k
-            sparsity = 1 - 1/k   →   k = round(1 / (1 - target_sparsity))
+            sparsity = 1 - 1/k   ->   k = round(1 / (1 - target_sparsity))
 
         The smallest feasible k that divides both in_features and out_features
         is selected; a warning is logged if the achieved sparsity differs from
@@ -581,7 +699,7 @@ class MonarchLinear(nn.Module):
         if not (0.0 <= target_sparsity < 1.0):
             raise ValueError(f"target_sparsity must be in [0, 1), got {target_sparsity}")
 
-        # Ideal k (density = 1/k → sparsity = 1 - 1/k)
+        # Ideal k (density = 1/k -> sparsity = 1 - 1/k)
         ideal_k = 1.0 / (1.0 - target_sparsity) if target_sparsity > 0.0 else 1.0
         ideal_k_int = max(1, round(ideal_k))
 
@@ -636,9 +754,9 @@ class MonarchLinear(nn.Module):
     ) -> "MonarchLinear":
         """Create a MonarchLinear with approximately the desired number of trainable weight entries.
 
-        For uniform blocks of size (out_features/k) × (in_features/k):
+        For uniform blocks of size (out_features/k) x (in_features/k):
             entries = k * (out_features/k) * (in_features/k) = in_features * out_features / k
-            →  k = round(in_features * out_features / target_entries)
+            ->  k = round(in_features * out_features / target_entries)
 
         The nearest k that divides both in_features and out_features is selected;
         a warning is logged if the achieved entry count differs substantially from
@@ -667,7 +785,7 @@ class MonarchLinear(nn.Module):
                 f"target_entries must be in [1, {total}], got {target_entries}"
             )
 
-        # Ideal k: entries = total / k  →  k = total / target_entries
+        # Ideal k: entries = total / k  ->  k = total / target_entries
         ideal_k = total / target_entries
         ideal_k_int = max(1, round(ideal_k))
 

@@ -151,11 +151,13 @@ class TestFusedBackward:
 
         # Compare block gradients — backward involves two matmul steps
         # (forward + weight gradient) so TF32 error accumulates more.
-        for i, (bf, br) in enumerate(zip(layer_fused.blocks, layer_ref.blocks)):
-            assert bf.grad is not None, f"fused block[{i}].grad is None"
-            assert br.grad is not None, f"ref block[{i}].grad is None"
-            assert torch.allclose(bf.grad, br.grad, atol=1e-2), \
-                f"block[{i}] grad max diff: {(bf.grad - br.grad).abs().max().item()}"
+        for i in range(layer_fused.num_blocks):
+            gf = layer_fused.block_grad(i)
+            gr = layer_ref.block_grad(i)
+            assert gf is not None, f"fused block_grad({i}) is None"
+            assert gr is not None, f"ref block_grad({i}) is None"
+            assert torch.allclose(gf, gr, atol=1e-2), \
+                f"block[{i}] grad max diff: {(gf - gr).abs().max().item()}"
 
         # Compare bias gradients
         if layer_fused.bias is not None:
@@ -201,7 +203,7 @@ class TestFusedBackward:
         loss.backward()
 
         # Reconstruct S_grad from block gradients
-        M_grad = torch.block_diag(*[b.grad.clone() for b in layer.blocks])
+        M_grad = torch.block_diag(*[layer.block_grad(i).clone() for i in range(layer.num_blocks)])
         S_grad_temp = torch.zeros(layer.out_features, layer.in_features, device="cuda")
         S_grad_temp[layer.perm_out] = M_grad
         S_grad = torch.zeros_like(S_grad_temp)
@@ -238,7 +240,7 @@ class TestFusedBackward:
     def test_optimizer_step(self):
         """SGD step updates blocks but not permutations when using fused path."""
         layer = make_monarch(64, 64, num_blocks=4, seed=99)
-        blocks_before = [b.data.clone() for b in layer.blocks]
+        blocks_before = [layer.blocks[i].data.clone() for i in range(layer.num_blocks)]
         perm_in_before = layer.perm_in.clone()
         perm_out_before = layer.perm_out.clone()
 
@@ -248,8 +250,9 @@ class TestFusedBackward:
         loss.backward()
         optimizer.step()
 
-        for i, (block, before) in enumerate(zip(layer.blocks, blocks_before)):
-            assert not torch.equal(block.data, before), f"block[{i}] unchanged"
+        for i in range(layer.num_blocks):
+            assert not torch.equal(layer.blocks[i].data, blocks_before[i]), \
+                f"block[{i}] unchanged"
 
         assert torch.equal(layer.perm_in, perm_in_before)
         assert torch.equal(layer.perm_out, perm_out_before)
@@ -286,6 +289,19 @@ def test_fallback_on_cpu():
 
 @requires_fused
 def test_auto_detect_uses_fused_on_cuda():
-    """When use_fused=None (default), CUDA input should auto-select fused path."""
-    layer = make_monarch(64, 64, num_blocks=4, seed=1)
+    """When use_fused=None (default), CUDA input with ≥8 blocks should auto-select fused path."""
+    # num_blocks=8 — enough GPU parallelism for the fused path to be preferred.
+    layer = make_monarch(64, 64, num_blocks=8, seed=1)
     assert layer._can_use_fused(torch.randn(1, 64, device="cuda"))
+
+
+@requires_fused
+def test_auto_detect_uses_bmm_for_few_blocks():
+    """With < 8 blocks, auto-detect should prefer BMM (not fused) for better perf."""
+    layer = make_monarch(64, 64, num_blocks=4, seed=1)
+    assert not layer._can_use_fused(torch.randn(1, 64, device="cuda"))
+    # But explicit use_fused=True should still work
+    x = torch.randn(8, 64, device="cuda")
+    y = layer(x, use_fused=True)
+    y_ref = layer(x, use_fused=False)
+    assert torch.allclose(y, y_ref, atol=3e-3)
