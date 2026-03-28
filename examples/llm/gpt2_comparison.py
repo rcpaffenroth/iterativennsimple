@@ -48,7 +48,7 @@ if _comparisons_dir not in sys.path:
     sys.path.append(_comparisons_dir)  # append (not insert) so our models.py wins
 
 from data import load_wikitext, create_dataloaders
-from models import (
+from gpt2_models import (
     build_model, ALL_MODEL_NAMES, MODEL_CONFIGS, LS_CONFIGS, INN_CONFIGS,
     LSLinear3D,
 )
