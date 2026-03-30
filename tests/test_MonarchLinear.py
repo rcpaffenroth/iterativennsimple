@@ -13,10 +13,17 @@ from iterativennsimple.MonarchLinear import MonarchLinear
 # ---------------------------------------------------------------------------
 
 def make_simple_monarch(in_f: int = 16, out_f: int = 16, num_blocks: int = 4,
-                        bias: bool = True, seed: int = 42) -> MonarchLinear:
-    """Create a small uniform-block MonarchLinear for testing."""
+                        bias: bool = True, seed: int = 42,
+                        factored: bool = False) -> MonarchLinear:
+    """Create a small uniform-block MonarchLinear for testing.
+
+    Uses factored=False by default so that tests exercising weight_stack,
+    block_grad, etc. continue to work.  Factored-specific tests set
+    factored=True explicitly.
+    """
     return MonarchLinear.from_uniform_blocks(
-        in_f, out_f, num_blocks=num_blocks, bias=bias, seed=seed
+        in_f, out_f, num_blocks=num_blocks, bias=bias, seed=seed,
+        factored=factored,
     )
 
 
@@ -137,7 +144,8 @@ def test_bmm_and_loop_matmul_agree():
     layer_bmm = make_simple_monarch(in_f=16, out_f=16, seed=13)
     # Build a loop-path layer with identical weights/permutations via state_dict.
     layer_loop = MonarchLinear.from_uniform_blocks(
-        16, 16, num_blocks=4, force_loop_matmul=True, seed=13, bias=True
+        16, 16, num_blocks=4, force_loop_matmul=True, seed=13, bias=True,
+        factored=False,
     )
     layer_loop.load_state_dict(layer_bmm.state_dict())
     y_bmm  = layer_bmm(x)
@@ -424,17 +432,17 @@ def test_entry_target():
 
     # Ask for 1/4 of all entries → k=4 → 16384 entries
     target = total // 4
-    layer = MonarchLinear.from_entry_target(in_f, out_f, target_entries=target, seed=3)
+    layer = MonarchLinear.from_entry_target(in_f, out_f, target_entries=target, seed=3, factored=False)
     achieved = layer.number_of_trainable_parameters()
     assert abs(achieved - target) <= 0.05 * target, \
         f"achieved {achieved} entries, expected ~{target}"
 
     # Exact match: target_entries == total → k=1 → dense layer
-    layer_dense = MonarchLinear.from_entry_target(in_f, out_f, target_entries=total, seed=3)
+    layer_dense = MonarchLinear.from_entry_target(in_f, out_f, target_entries=total, seed=3, factored=False)
     assert layer_dense.num_blocks == 1
 
     # Exact match: target_entries == total/in_f → k=in_f → smallest blocks
-    layer_min = MonarchLinear.from_entry_target(in_f, out_f, target_entries=out_f, seed=3)
+    layer_min = MonarchLinear.from_entry_target(in_f, out_f, target_entries=out_f, seed=3, factored=False)
     assert layer_min.num_blocks == in_f
 
     # Invalid target raises ValueError

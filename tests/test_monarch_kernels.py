@@ -51,10 +51,15 @@ requires_fused = pytest.mark.skipif(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_monarch(in_f=64, out_f=64, num_blocks=4, bias=True, seed=42, device="cuda"):
-    """Create a MonarchLinear on the specified device."""
+def make_monarch(in_f=64, out_f=64, num_blocks=4, bias=True, seed=42, device="cuda",
+                 factored=False):
+    """Create a MonarchLinear on the specified device.
+
+    Uses factored=False by default so that non-factored kernel tests remain
+    isolated. Factored-specific tests use make_factored() instead.
+    """
     return MonarchLinear.from_uniform_blocks(
-        in_f, out_f, num_blocks=num_blocks, bias=bias, seed=seed
+        in_f, out_f, num_blocks=num_blocks, bias=bias, seed=seed, factored=factored,
     ).to(device)
 
 
@@ -281,7 +286,7 @@ class TestFusedHalfPrecision:
 
 def test_fallback_on_cpu():
     """_can_use_fused returns False on CPU, so forward still works."""
-    layer = MonarchLinear.from_uniform_blocks(32, 32, num_blocks=4, seed=1)
+    layer = MonarchLinear.from_uniform_blocks(32, 32, num_blocks=4, seed=1, factored=False)
     x = torch.randn(8, 32)
     y = layer(x)  # should use Python path, no error
     assert y.shape == (8, 32)
@@ -305,3 +310,152 @@ def test_auto_detect_uses_bmm_for_few_blocks():
     y = layer(x, use_fused=True)
     y_ref = layer(x, use_fused=False)
     assert torch.allclose(y, y_ref, atol=3e-3)
+
+
+# ===========================================================================
+# Factored block tests
+# ===========================================================================
+
+def make_factored(dim=64, num_blocks=4, bias=True, seed=42, device="cuda"):
+    """Create a factored MonarchLinear on the specified device."""
+    return MonarchLinear.from_uniform_blocks(
+        dim, dim, num_blocks=num_blocks, bias=bias, seed=seed, factored=True
+    ).to(device)
+
+
+@requires_fused
+class TestFactoredForward:
+    """Verify factored fused forward matches the views fallback."""
+
+    def test_basic_4_blocks(self):
+        layer = make_factored(64, num_blocks=4, seed=1)
+        x = torch.randn(32, 64, device="cuda")
+        y_fused = layer(x, use_fused=True)
+        y_ref = layer(x, use_fused=False, use_views=True)
+        assert torch.allclose(y_fused, y_ref, atol=3e-3), \
+            f"max diff: {(y_fused - y_ref).abs().max().item()}"
+
+    def test_9_blocks(self):
+        layer = make_factored(9 * 16, num_blocks=9, seed=2)
+        x = torch.randn(16, 9 * 16, device="cuda")
+        y_fused = layer(x, use_fused=True)
+        y_ref = layer(x, use_fused=False, use_views=True)
+        assert torch.allclose(y_fused, y_ref, atol=3e-3), \
+            f"max diff: {(y_fused - y_ref).abs().max().item()}"
+
+    def test_16_blocks(self):
+        layer = make_factored(256, num_blocks=16, seed=3)
+        x = torch.randn(8, 256, device="cuda")
+        y_fused = layer(x, use_fused=True)
+        y_ref = layer(x, use_fused=False, use_views=True)
+        assert torch.allclose(y_fused, y_ref, atol=3e-3), \
+            f"max diff: {(y_fused - y_ref).abs().max().item()}"
+
+    def test_no_bias(self):
+        layer = make_factored(64, num_blocks=4, bias=False, seed=4)
+        x = torch.randn(8, 64, device="cuda")
+        y_fused = layer(x, use_fused=True)
+        y_ref = layer(x, use_fused=False, use_views=True)
+        assert torch.allclose(y_fused, y_ref, atol=3e-3), \
+            f"max diff: {(y_fused - y_ref).abs().max().item()}"
+
+    def test_matches_dense(self):
+        """Factored fused forward matches dense x @ S.T + b."""
+        layer = make_factored(64, num_blocks=4, seed=7)
+        x = torch.randn(8, 64, device="cuda")
+        y_fused = layer(x, use_fused=True)
+        S = layer.to_dense()
+        y_dense = x @ S.T
+        if layer.bias is not None:
+            y_dense = y_dense + layer.bias
+        assert torch.allclose(y_fused, y_dense, atol=3e-3), \
+            f"max diff: {(y_fused - y_dense).abs().max().item()}"
+
+    def test_parameter_savings(self):
+        """Factored mode stores fewer parameters than unfactored."""
+        factored = make_factored(64, num_blocks=4, seed=1, device="cpu")
+        unfactored = MonarchLinear.from_uniform_blocks(
+            64, 64, num_blocks=4, seed=1, factored=False,
+        )
+        # 4 blocks -> 2 factors: 2x savings in weight params
+        assert factored.num_factors == 2
+        assert factored.factor_stack.shape == (2, 16, 16)
+        assert factored.number_of_trainable_parameters() < unfactored.number_of_trainable_parameters()
+
+
+@requires_fused
+class TestFactoredBackward:
+    """Verify factored fused backward matches the views fallback."""
+
+    def _compare_grads(self, layer_fused, layer_ref, x):
+        """Run forward+backward on both paths and compare factor_stack gradients."""
+        x_f = x.clone().detach()
+        y_f = layer_fused(x_f, use_fused=True)
+        y_f.sum().backward()
+
+        x_r = x.clone().detach()
+        y_r = layer_ref(x_r, use_fused=False, use_views=True)
+        y_r.sum().backward()
+
+        # Compare factor_stack gradients.
+        # Factored backward involves extra matmul steps (dW reduction through
+        # factor products), so TF32 error accumulates more than unfactored.
+        gf = layer_fused.factor_stack.grad
+        gr = layer_ref.factor_stack.grad
+        assert gf is not None, "fused factor_stack.grad is None"
+        assert gr is not None, "ref factor_stack.grad is None"
+        assert torch.allclose(gf, gr, atol=5e-2), \
+            f"factor_stack grad max diff: {(gf - gr).abs().max().item()}"
+
+        if layer_fused.bias is not None:
+            assert torch.allclose(layer_fused.bias.grad, layer_ref.bias.grad, atol=5e-2), \
+                f"bias grad max diff: {(layer_fused.bias.grad - layer_ref.bias.grad).abs().max().item()}"
+
+    def test_grad_4_blocks(self):
+        layer = make_factored(64, num_blocks=4, seed=20)
+        layer2 = make_factored(64, num_blocks=4, seed=20)
+        layer2.load_state_dict(layer.state_dict())
+        x = torch.randn(16, 64, device="cuda")
+        self._compare_grads(layer, layer2, x)
+
+    def test_grad_9_blocks(self):
+        layer = make_factored(9 * 16, num_blocks=9, seed=21)
+        layer2 = make_factored(9 * 16, num_blocks=9, seed=21)
+        layer2.load_state_dict(layer.state_dict())
+        x = torch.randn(8, 9 * 16, device="cuda")
+        self._compare_grads(layer, layer2, x)
+
+    def test_grad_no_bias(self):
+        layer = make_factored(64, num_blocks=4, bias=False, seed=22)
+        layer2 = make_factored(64, num_blocks=4, bias=False, seed=22)
+        layer2.load_state_dict(layer.state_dict())
+        x = torch.randn(16, 64, device="cuda")
+        self._compare_grads(layer, layer2, x)
+
+    def test_optimizer_step(self):
+        """SGD step updates factor_stack but not permutations."""
+        layer = make_factored(64, num_blocks=4, seed=99)
+        factors_before = layer.factor_stack.data.clone()
+        perm_in_before = layer.perm_in.clone()
+        perm_out_before = layer.perm_out.clone()
+
+        optimizer = torch.optim.SGD(layer.parameters(), lr=0.1)
+        x = torch.randn(8, 64, device="cuda")
+        loss = layer(x, use_fused=True).sum()
+        loss.backward()
+        optimizer.step()
+
+        assert not torch.equal(layer.factor_stack.data, factors_before), \
+            "factor_stack unchanged after optimizer step"
+        assert torch.equal(layer.perm_in, perm_in_before)
+        assert torch.equal(layer.perm_out, perm_out_before)
+
+
+def test_factored_fallback_on_cpu():
+    """Factored mode works on CPU via views path."""
+    layer = MonarchLinear.from_uniform_blocks(
+        64, 64, num_blocks=4, seed=1, factored=True
+    )
+    x = torch.randn(8, 64)
+    y = layer(x)
+    assert y.shape == (8, 64)

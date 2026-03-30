@@ -32,6 +32,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from iterativennsimple.LSLinear import LSLinear
+from iterativennsimple.MonarchLinear import MonarchLinear
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +54,13 @@ LLAMA_LS_CONFIGS = {
     "large": dict(num_blocks=16, rank=64),
 }
 
-LLAMA_ALL_MODEL_NAMES = ["standard", "ls"]
+LLAMA_FACTORED_CONFIGS = {
+    "small": dict(num_blocks=4),
+    "medium": dict(num_blocks=16),
+    "large": dict(num_blocks=16),
+}
+
+LLAMA_ALL_MODEL_NAMES = ["standard", "ls", "factored"]
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +93,24 @@ def _make_linear_factory(bias: bool = False):
     return factory
 
 
+def _make_factored_factory(num_blocks: int, bias: bool = False):
+    """Return a linear_factory callable that produces factored MonarchLinear3D layers.
+
+    Factored mode requires square layers (in_f == out_f). For non-square
+    projections (e.g. d_model -> d_ff), falls back to standard nn.Linear.
+    """
+    def factory(in_f: int, out_f: int) -> nn.Module:
+        if in_f != out_f:
+            # Factored requires square blocks; fall back to nn.Linear for non-square
+            return nn.Linear(in_f, out_f, bias=bias)
+        nb = _find_common_num_blocks(in_f, out_f, num_blocks)
+        m = MonarchLinear.from_uniform_blocks(
+            in_f, out_f, num_blocks=nb, bias=bias, factored=True,
+        )
+        return MonarchLinear3D(m)
+    return factory
+
+
 # ---------------------------------------------------------------------------
 # LSLinear3D — adapter for (B, T, D) tensors
 # ---------------------------------------------------------------------------
@@ -102,6 +127,29 @@ class LSLinear3D(nn.Module):
         self.linear = ls_linear
         self.in_features = ls_linear.in_features
         self.out_features = ls_linear.out_features
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        shape = x.shape
+        x_2d = x.reshape(-1, shape[-1])
+        y_2d = self.linear(x_2d)
+        return y_2d.reshape(*shape[:-1], -1)
+
+    def number_of_trainable_parameters(self) -> int:
+        return self.linear.number_of_trainable_parameters()
+
+
+class MonarchLinear3D(nn.Module):
+    """Wraps MonarchLinear to handle arbitrary leading dimensions (e.g. (B, T, D)).
+
+    MonarchLinear only accepts 2D (batch, features) or 1D (features,) input.
+    This adapter flattens leading dims, calls MonarchLinear, then restores shape.
+    """
+
+    def __init__(self, monarch_linear: MonarchLinear):
+        super().__init__()
+        self.linear = monarch_linear
+        self.in_features = monarch_linear.in_features
+        self.out_features = monarch_linear.out_features
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         shape = x.shape
@@ -429,7 +477,7 @@ class Llama(nn.Module):
         for name, module in self.named_modules():
             if id(module) in counted:
                 continue
-            if isinstance(module, LSLinear3D):
+            if isinstance(module, (LSLinear3D, MonarchLinear3D)):
                 total += module.number_of_trainable_parameters()
                 counted.add(id(module))
                 for child in module.modules():
@@ -504,11 +552,41 @@ def build_ls_llama(
     )
 
 
+def build_factored_llama(
+    vocab_size: int,
+    num_blocks: int = 4,
+    d_model: int = 256,
+    n_layers: int = 6,
+    n_heads: int = 8,
+    n_kv_heads: int = 4,
+    d_ff: int = 688,
+    context_len: int = 256,
+    dropout: float = 0.0,
+    **kwargs,
+) -> Llama:
+    """Build a Llama with factored MonarchLinear replacing square linear projections.
+
+    Non-square projections (e.g. d_model -> d_ff in SwiGLU) fall back to nn.Linear
+    since factored mode requires square blocks.
+    """
+    return Llama(
+        vocab_size=vocab_size,
+        d_model=d_model,
+        n_layers=n_layers,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        d_ff=d_ff,
+        context_len=context_len,
+        dropout=dropout,
+        linear_factory=_make_factored_factory(num_blocks, bias=False),
+    )
+
+
 def build_llama_model(name: str, vocab_size: int, config_name: str = "small", **overrides):
     """Build a Llama model by name using a preset config.
 
     Args:
-        name: One of "standard", "ls".
+        name: One of "standard", "ls", "factored".
         vocab_size: Vocabulary size.
         config_name: Preset config name ("small", "medium", "large").
         **overrides: Override any config parameter.
@@ -527,6 +605,12 @@ def build_llama_model(name: str, vocab_size: int, config_name: str = "small", **
         ls_cfg.update({k: v for k, v in overrides.items() if k in ("num_blocks", "rank")})
         cfg.update(ls_cfg)
         return build_ls_llama(vocab_size=vocab_size, **cfg)
+
+    elif name == "factored":
+        f_cfg = dict(LLAMA_FACTORED_CONFIGS.get(config_name, LLAMA_FACTORED_CONFIGS["small"]))
+        f_cfg.update({k: v for k, v in overrides.items() if k in ("num_blocks",)})
+        cfg.update(f_cfg)
+        return build_factored_llama(vocab_size=vocab_size, **cfg)
 
     else:
         raise ValueError(f"Unknown model: {name!r}. Choose from: {LLAMA_ALL_MODEL_NAMES}")

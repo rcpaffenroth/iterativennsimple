@@ -41,6 +41,31 @@ class _UniformBlockAccessor:
             yield self._ws[i]
 
 
+class _FactoredBlockAccessor:
+    """Read-only list-like accessor that materializes blocks from factors on demand.
+
+    For factored mode, block[i] = factor_stack[recipe[i,0]] @ factor_stack[recipe[i,1]].
+    These are NOT views — mutations will not write through to factor_stack.
+    """
+
+    __slots__ = ("_fs", "_recipe")
+
+    def __init__(self, factor_stack: nn.Parameter, block_recipe: torch.Tensor):
+        self._fs = factor_stack
+        self._recipe = block_recipe
+
+    def __len__(self) -> int:
+        return self._recipe.shape[0]
+
+    def __getitem__(self, idx):
+        left, right = self._recipe[idx]
+        return self._fs[left] @ self._fs[right]
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+
 class MonarchLinear(nn.Module):
     """Sparse linear layer using the Monarch matrix format: S = P1 @ M @ P2.
 
@@ -109,6 +134,7 @@ class MonarchLinear(nn.Module):
         perm_out: torch.Tensor,
         bias: bool = True,
         force_loop_matmul: bool = False,
+        factored: bool = True,
         device=None,
         dtype=None,
     ) -> None:
@@ -142,22 +168,52 @@ class MonarchLinear(nn.Module):
         self.block_in_features: list[int] = list(block_in_features)
         self.block_out_features: list[int] = list(block_out_features)
         self.force_loop_matmul: bool = force_loop_matmul
-
         # Detect uniform blocks (the common, performance-critical case).
         self._uniform: bool = (
             len(set(block_in_features)) == 1 and len(set(block_out_features)) == 1
         )
 
-        if self._uniform:
+        # --- Factored block mode ---
+        # Factored requires uniform square blocks.  When factored=True is
+        # requested but blocks are non-square or non-uniform, we silently
+        # fall back to unfactored so that callers don't need to check.
+        _can_factor = (
+            factored
+            and self._uniform
+            and block_in_features[0] == block_out_features[0]
+        )
+        self._factored: bool = _can_factor
+
+        if _can_factor:
+            bi = block_in_features[0]
+            self.num_factors = math.ceil(math.sqrt(self.num_blocks))
+            self.factor_stack = nn.Parameter(
+                torch.empty(self.num_factors, bi, bi, **factory_kwargs),
+                requires_grad=True,
+            )
+            # Build block recipe: (num_blocks, 2) mapping block_id -> (left, right)
+            recipe = []
+            for i in range(self.num_factors):
+                for j in range(self.num_factors):
+                    if len(recipe) >= self.num_blocks:
+                        break
+                    recipe.append([i, j])
+                if len(recipe) >= self.num_blocks:
+                    break
+            recipe_tensor = torch.tensor(recipe, dtype=torch.int32).flatten()
+            self.register_buffer("block_recipe", recipe_tensor)
+        elif self._uniform:
             # Single contiguous parameter — eliminates torch.stack() per forward.
             bi = block_in_features[0]
             bo = block_out_features[0]
+            self.num_factors = 0
             self.weight_stack = nn.Parameter(
                 torch.empty(self.num_blocks, bo, bi, **factory_kwargs),
                 requires_grad=True,
             )
         else:
             # Non-uniform blocks: use ParameterList (rare).
+            self.num_factors = 0
             self._blocks = nn.ParameterList(
                 [
                     nn.Parameter(
@@ -192,15 +248,23 @@ class MonarchLinear(nn.Module):
     def blocks(self):
         """List-like access to individual block weight tensors.
 
+        For factored blocks these are materialized on-the-fly (read-only).
         For uniform blocks these are views into ``weight_stack``; for
         non-uniform blocks they are the underlying ParameterList entries.
         """
+        if self._factored:
+            return _FactoredBlockAccessor(self.factor_stack, self.block_recipe.view(-1, 2))
         if self._uniform:
             return _UniformBlockAccessor(self.weight_stack)
         return self._blocks
 
     def block_grad(self, i: int):
-        """Return the gradient tensor for block *i*, or None if unavailable."""
+        """Return the gradient tensor for block *i*, or None if unavailable.
+
+        For factored mode, returns None (use factor_stack.grad instead).
+        """
+        if self._factored:
+            return None
         if self._uniform:
             if self.weight_stack.grad is not None:
                 return self.weight_stack.grad[i]
@@ -213,8 +277,12 @@ class MonarchLinear(nn.Module):
 
     def reset_parameters(self) -> None:
         """Re-initialise block weights (Kaiming uniform) and bias."""
-        for block in self.blocks:
-            nn.init.kaiming_uniform_(block, a=math.sqrt(5))
+        if self._factored:
+            for i in range(self.num_factors):
+                nn.init.kaiming_uniform_(self.factor_stack[i], a=math.sqrt(5))
+        else:
+            for block in self.blocks:
+                nn.init.kaiming_uniform_(block, a=math.sqrt(5))
         if self.bias is not None:
             fan_in = self.in_features
             bound = 1.0 / math.sqrt(fan_in) if fan_in > 0 else 0.0
@@ -269,7 +337,16 @@ class MonarchLinear(nn.Module):
         if use_views is None:
             use_views = not self._uniform
 
-        if use_fused:
+        if use_fused and self._factored:
+            from iterativennsimple.monarch_kernels import monarch_linear_factored_fused
+
+            result = monarch_linear_factored_fused(
+                input, self.factor_stack, self.block_recipe,
+                self.perm_in, self.perm_out, self.bias,
+                self.num_blocks, self.num_factors,
+                self.block_in_features[0],
+            )
+        elif use_fused:
             from iterativennsimple.monarch_kernels import monarch_linear_fused
 
             # weight_stack is already (K, block_out, block_in) — no allocation.
@@ -336,7 +413,9 @@ class MonarchLinear(nn.Module):
             return False
         if not self._uniform:
             return False
-        if self.num_blocks < 8:
+        # Factored mode works well with fewer blocks (the fused kernel is
+        # always beneficial since it avoids materializing the weight stack).
+        if not self._factored and self.num_blocks < 8:
             return False
         # At large batch × block_size, cuBLAS backward dominates our Triton
         # backward kernels.  Threshold tuned on RTX 4090 benchmarks.
@@ -349,6 +428,20 @@ class MonarchLinear(nn.Module):
             return triton_is_available()
         except ImportError:
             return False
+
+    def _materialize_weight_stack(self) -> torch.Tensor:
+        """Materialize (num_blocks, block_size, block_size) from factor_stack.
+
+        Used by the BMM and views fallback paths. Not needed for the fused
+        Triton path which reconstructs weights on-the-fly.
+        """
+        recipe = self.block_recipe.view(-1, 2)
+        # Use torch.bmm on the factor pairs for efficiency
+        left_indices = recipe[:, 0].long()
+        right_indices = recipe[:, 1].long()
+        L = self.factor_stack[left_indices]   # (num_blocks, bs, bs)
+        R = self.factor_stack[right_indices]  # (num_blocks, bs, bs)
+        return torch.bmm(L, R)               # (num_blocks, bs, bs)
 
     def _block_matmul(self, x: torch.Tensor) -> torch.Tensor:
         """Apply the block-diagonal M^T to x (already permuted).
@@ -371,8 +464,11 @@ class MonarchLinear(nn.Module):
             # x:  (batch, num_blocks * block_in)
             # -> (batch, num_blocks, block_in) -> (num_blocks, batch, block_in)
             x_3d = x.reshape(batch, self.num_blocks, block_in).permute(1, 0, 2)
-            # weight_stack is already (num_blocks, block_out, block_in) — no stack needed.
-            W_3d = self.weight_stack if self._uniform else torch.stack(list(self.blocks))
+            # Materialize weight stack: factored or direct.
+            if self._factored:
+                W_3d = self._materialize_weight_stack()
+            else:
+                W_3d = self.weight_stack
             # bmm: (num_blocks, batch, block_in) x (num_blocks, block_in, block_out)
             #    = (num_blocks, batch, block_out)
             y_3d = torch.bmm(x_3d, W_3d.transpose(1, 2))
@@ -476,7 +572,9 @@ class MonarchLinear(nn.Module):
 
         This matches the interface expected by Sequential2D.number_of_trainable_parameters().
         """
-        if self._uniform:
+        if self._factored:
+            total = self.factor_stack.numel()
+        elif self._uniform:
             total = self.weight_stack.numel()
         else:
             total = sum(b.numel() for b in self._blocks)
@@ -485,12 +583,16 @@ class MonarchLinear(nn.Module):
         return total
 
     def extra_repr(self) -> str:
-        return (
-            f"in_features={self.in_features}, "
-            f"out_features={self.out_features}, "
-            f"num_blocks={self.num_blocks}, "
-            f"bias={self.bias is not None}"
-        )
+        parts = [
+            f"in_features={self.in_features}",
+            f"out_features={self.out_features}",
+            f"num_blocks={self.num_blocks}",
+            f"bias={self.bias is not None}",
+        ]
+        if self._factored:
+            parts.append(f"factored=True")
+            parts.append(f"num_factors={self.num_factors}")
+        return ", ".join(parts)
 
     # ------------------------------------------------------------------
     # Factory functions
@@ -559,6 +661,7 @@ class MonarchLinear(nn.Module):
         initialization_type: str | int = "kaiming",
         bias: bool = False,
         force_loop_matmul: bool = False,
+        factored: bool = True,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -574,6 +677,9 @@ class MonarchLinear(nn.Module):
                 "kaiming" (default), "zeros", 1, "C=val", "G", "G=mu,sigma",
                 "U", "U=lo,hi".
             bias:  Whether to include a learnable bias.
+            factored: If True, use factored block mode (stores sqrt(num_blocks) factor
+                      matrices, constructs blocks as pairwise products). Requires
+                      square uniform blocks.
             seed:  Optional integer seed for reproducible permutation generation.
             device: Target device.
             dtype:  Target dtype.
@@ -594,13 +700,18 @@ class MonarchLinear(nn.Module):
             perm_out=perm_out,
             bias=bias,
             force_loop_matmul=force_loop_matmul,
+            factored=factored,
             device=device,
             dtype=dtype,
         )
 
         if initialization_type != "kaiming":
-            for block in layer.blocks:
-                MonarchLinear._initialize_block(block, initialization_type)
+            if factored:
+                for i in range(layer.num_factors):
+                    MonarchLinear._initialize_block(layer.factor_stack[i], initialization_type)
+            else:
+                for block in layer.blocks:
+                    MonarchLinear._initialize_block(block, initialization_type)
 
         return layer
 
@@ -612,6 +723,7 @@ class MonarchLinear(nn.Module):
         initialization_type: str | int = "kaiming",
         bias: bool = False,
         force_loop_matmul: bool = False,
+        factored: bool = True,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -624,6 +736,7 @@ class MonarchLinear(nn.Module):
             num_blocks:   Number of blocks along the diagonal.
             initialization_type: See from_block_config. Default "kaiming".
             bias:   Whether to include a learnable bias.
+            factored: If True, use factored block mode. Requires in_features == out_features.
             seed:   Optional seed for reproducible permutations.
             device: Target device.
             dtype:  Target dtype.
@@ -652,6 +765,7 @@ class MonarchLinear(nn.Module):
             initialization_type=initialization_type,
             bias=bias,
             force_loop_matmul=force_loop_matmul,
+            factored=factored,
             seed=seed,
             device=device,
             dtype=dtype,
@@ -665,6 +779,7 @@ class MonarchLinear(nn.Module):
         initialization_type: str | int = "kaiming",
         bias: bool = False,
         force_loop_matmul: bool = False,
+        factored: bool = True,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -735,6 +850,7 @@ class MonarchLinear(nn.Module):
             initialization_type=initialization_type,
             bias=bias,
             force_loop_matmul=force_loop_matmul,
+            factored=factored,
             seed=seed,
             device=device,
             dtype=dtype,
@@ -748,6 +864,7 @@ class MonarchLinear(nn.Module):
         initialization_type: str | int = "kaiming",
         bias: bool = False,
         force_loop_matmul: bool = False,
+        factored: bool = True,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -818,6 +935,7 @@ class MonarchLinear(nn.Module):
             initialization_type=initialization_type,
             bias=bias,
             force_loop_matmul=force_loop_matmul,
+            factored=factored,
             seed=seed,
             device=device,
             dtype=dtype,

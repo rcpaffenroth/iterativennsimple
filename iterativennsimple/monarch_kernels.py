@@ -364,6 +364,336 @@ if HAS_TRITON:
             mask=out_mask[:, None] & in_mask[None, :],
         )
 
+    # =================================================================== #
+    #  Factored block kernels                                               #
+    # =================================================================== #
+    # Instead of storing num_blocks independent weight matrices, factored
+    # mode stores num_factors = ceil(sqrt(num_blocks)) factor matrices and
+    # constructs each block on-the-fly as factor[left] @ factor[right].
+
+    def _factored_forward_configs():
+        """Autotuning configs for the factored forward kernel."""
+        return [
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 16, "BLOCK_N": 16, "BLOCK_F": 16}, num_warps=2, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 16, "BLOCK_N": 16, "BLOCK_F": 16}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 32, "BLOCK_N": 32, "BLOCK_F": 16}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 32, "BLOCK_N": 32, "BLOCK_F": 16}, num_warps=4, num_stages=3),
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 32, "BLOCK_N": 32, "BLOCK_F": 32}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 32, "BLOCK_N": 32, "BLOCK_F": 32}, num_warps=4, num_stages=3),
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 64, "BLOCK_N": 64, "BLOCK_F": 32}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 64, "BLOCK_N": 64, "BLOCK_F": 32}, num_warps=8, num_stages=2),
+        ]
+
+    @triton.autotune(
+        configs=_factored_forward_configs(),
+        key=["block_size", "batch"],
+    )
+    @triton.jit
+    def _monarch_factored_forward_kernel(
+        # Pointers
+        input_ptr,
+        output_ptr,
+        factor_ptr,
+        recipe_ptr,
+        perm_in_ptr,
+        perm_out_ptr,
+        bias_ptr,
+        # Dimensions
+        batch,
+        in_features,
+        out_features,
+        block_size: tl.constexpr,
+        num_blocks: tl.constexpr,
+        # Tile sizes (autotuned)
+        BLOCK_BATCH: tl.constexpr,
+        BLOCK_K: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        BLOCK_F: tl.constexpr,
+        # Flags
+        HAS_BIAS: tl.constexpr,
+    ):
+        """Fused factored forward: permute -> factored block matmul -> inv-permute -> bias.
+
+        Each block weight is reconstructed on-the-fly as factor[left] @ factor[right].
+        Grid: (num_blocks, cdiv(batch, BLOCK_BATCH), cdiv(block_size, BLOCK_N))
+        """
+        block_id = tl.program_id(0)
+        batch_tile = tl.program_id(1)
+        out_tile = tl.program_id(2)
+
+        # Load recipe for this block
+        left_idx = tl.load(recipe_ptr + block_id * 2).to(tl.int64)
+        right_idx = tl.load(recipe_ptr + block_id * 2 + 1).to(tl.int64)
+        bs2 = block_size * block_size
+
+        batch_offs = batch_tile * BLOCK_BATCH + tl.arange(0, BLOCK_BATCH)
+        batch_mask = batch_offs < batch
+
+        out_local = out_tile * BLOCK_N + tl.arange(0, BLOCK_N)
+        out_mask = out_local < block_size
+        perm_out_idx = block_id * block_size + out_local
+        out_cols = tl.load(perm_out_ptr + perm_out_idx, mask=out_mask, other=0)
+
+        acc = tl.zeros((BLOCK_BATCH, BLOCK_N), dtype=tl.float32)
+
+        for k_start in range(0, block_size, BLOCK_K):
+            k_offs = k_start + tl.arange(0, BLOCK_K)
+            k_mask = k_offs < block_size
+
+            # Load input columns via perm_in (gathered reads)
+            perm_in_idx = block_id * block_size + k_offs
+            in_cols = tl.load(perm_in_ptr + perm_in_idx, mask=k_mask, other=0)
+
+            x_tile = tl.load(
+                input_ptr + batch_offs[:, None] * in_features + in_cols[None, :],
+                mask=batch_mask[:, None] & k_mask[None, :],
+                other=0.0,
+            )
+
+            # Reconstruct w_tile = factor[left, out_local, :] @ factor[right, :, k_offs]
+            # w_tile: (BLOCK_N, BLOCK_K)
+            w_tile = tl.zeros((BLOCK_N, BLOCK_K), dtype=tl.float32)
+            for f_start in range(0, block_size, BLOCK_F):
+                f_offs = f_start + tl.arange(0, BLOCK_F)
+                f_mask = f_offs < block_size
+
+                l_tile = tl.load(
+                    factor_ptr + left_idx * bs2
+                    + out_local[:, None] * block_size + f_offs[None, :],
+                    mask=out_mask[:, None] & f_mask[None, :],
+                    other=0.0,
+                )
+                r_tile = tl.load(
+                    factor_ptr + right_idx * bs2
+                    + f_offs[:, None] * block_size + k_offs[None, :],
+                    mask=f_mask[:, None] & k_mask[None, :],
+                    other=0.0,
+                )
+                w_tile += tl.dot(l_tile, r_tile)
+
+            # Cast w_tile to match x_tile dtype (e.g. bf16) so tl.dot is happy
+            w_tile = w_tile.to(x_tile.dtype)
+            # Matmul: (BLOCK_BATCH, BLOCK_K) @ (BLOCK_K, BLOCK_N)
+            acc += tl.dot(x_tile, tl.trans(w_tile))
+
+        if HAS_BIAS:
+            bias_vals = tl.load(bias_ptr + out_cols, mask=out_mask, other=0.0)
+            acc += bias_vals[None, :]
+
+        tl.store(
+            output_ptr + batch_offs[:, None] * out_features + out_cols[None, :],
+            acc,
+            mask=batch_mask[:, None] & out_mask[None, :],
+        )
+
+    # ---- Factored backward input kernel --------------------------------
+
+    def _factored_backward_input_configs():
+        """Autotuning configs for the factored backward input kernel."""
+        return [
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 16, "BLOCK_N": 16, "BLOCK_F": 16}, num_warps=2, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 16, "BLOCK_N": 16, "BLOCK_F": 16}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 32, "BLOCK_N": 32, "BLOCK_F": 16}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 32, "BLOCK_N": 32, "BLOCK_F": 16}, num_warps=4, num_stages=3),
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 32, "BLOCK_N": 32, "BLOCK_F": 32}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 32, "BLOCK_N": 32, "BLOCK_F": 32}, num_warps=4, num_stages=3),
+            triton.Config({"BLOCK_BATCH": 32, "BLOCK_K": 64, "BLOCK_N": 64, "BLOCK_F": 32}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_BATCH": 64, "BLOCK_K": 64, "BLOCK_N": 64, "BLOCK_F": 32}, num_warps=8, num_stages=2),
+        ]
+
+    @triton.autotune(
+        configs=_factored_backward_input_configs(),
+        key=["block_size", "batch"],
+    )
+    @triton.jit
+    def _monarch_factored_backward_input_kernel(
+        # Pointers
+        grad_output_ptr,
+        grad_input_ptr,
+        factor_ptr,
+        recipe_ptr,
+        perm_in_ptr,
+        perm_out_ptr,
+        # Dimensions
+        batch,
+        in_features,
+        out_features,
+        block_size: tl.constexpr,
+        num_blocks: tl.constexpr,
+        # Tile sizes (autotuned)
+        BLOCK_BATCH: tl.constexpr,
+        BLOCK_K: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        BLOCK_F: tl.constexpr,
+    ):
+        """Factored grad_input: reconstruct W from factors on-the-fly.
+
+        Grid: (num_blocks, cdiv(batch, BLOCK_BATCH), cdiv(block_size, BLOCK_N))
+        """
+        block_id = tl.program_id(0)
+        batch_tile = tl.program_id(1)
+        in_tile = tl.program_id(2)
+
+        left_idx = tl.load(recipe_ptr + block_id * 2).to(tl.int64)
+        right_idx = tl.load(recipe_ptr + block_id * 2 + 1).to(tl.int64)
+        bs2 = block_size * block_size
+
+        batch_offs = batch_tile * BLOCK_BATCH + tl.arange(0, BLOCK_BATCH)
+        batch_mask = batch_offs < batch
+
+        in_local = in_tile * BLOCK_N + tl.arange(0, BLOCK_N)
+        in_mask = in_local < block_size
+        perm_in_idx = block_id * block_size + in_local
+        in_cols = tl.load(perm_in_ptr + perm_in_idx, mask=in_mask, other=0)
+
+        acc = tl.zeros((BLOCK_BATCH, BLOCK_N), dtype=tl.float32)
+
+        for k_start in range(0, block_size, BLOCK_K):
+            k_offs = k_start + tl.arange(0, BLOCK_K)
+            k_mask = k_offs < block_size
+
+            perm_out_idx = block_id * block_size + k_offs
+            out_cols = tl.load(perm_out_ptr + perm_out_idx, mask=k_mask, other=0)
+
+            go_tile = tl.load(
+                grad_output_ptr + batch_offs[:, None] * out_features + out_cols[None, :],
+                mask=batch_mask[:, None] & k_mask[None, :],
+                other=0.0,
+            )
+
+            # Reconstruct w_tile = factor[left, k_offs, :] @ factor[right, :, in_local]
+            # w_tile: (BLOCK_K, BLOCK_N)
+            w_tile = tl.zeros((BLOCK_K, BLOCK_N), dtype=tl.float32)
+            for f_start in range(0, block_size, BLOCK_F):
+                f_offs = f_start + tl.arange(0, BLOCK_F)
+                f_mask = f_offs < block_size
+
+                l_tile = tl.load(
+                    factor_ptr + left_idx * bs2
+                    + k_offs[:, None] * block_size + f_offs[None, :],
+                    mask=k_mask[:, None] & f_mask[None, :],
+                    other=0.0,
+                )
+                r_tile = tl.load(
+                    factor_ptr + right_idx * bs2
+                    + f_offs[:, None] * block_size + in_local[None, :],
+                    mask=f_mask[:, None] & in_mask[None, :],
+                    other=0.0,
+                )
+                w_tile += tl.dot(l_tile, r_tile)
+
+            # Cast w_tile to match go_tile dtype for tl.dot compatibility
+            w_tile = w_tile.to(go_tile.dtype)
+            # (BLOCK_BATCH, BLOCK_K) @ (BLOCK_K, BLOCK_N)
+            acc += tl.dot(go_tile, w_tile)
+
+        tl.store(
+            grad_input_ptr + batch_offs[:, None] * in_features + in_cols[None, :],
+            acc,
+            mask=batch_mask[:, None] & in_mask[None, :],
+        )
+
+    # ---- Factored backward factor gradient kernel ----------------------
+
+    def _factored_grad_factor_configs():
+        """Autotuning configs for the factor gradient reduction kernel."""
+        return [
+            triton.Config({"BLOCK_M": 16, "BLOCK_N": 16, "BLOCK_P": 16}, num_warps=2, num_stages=2),
+            triton.Config({"BLOCK_M": 32, "BLOCK_N": 32, "BLOCK_P": 16}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_M": 32, "BLOCK_N": 32, "BLOCK_P": 32}, num_warps=4, num_stages=2),
+            triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_P": 32}, num_warps=8, num_stages=2),
+        ]
+
+    @triton.autotune(
+        configs=_factored_grad_factor_configs(),
+        key=["block_size", "num_blocks"],
+    )
+    @triton.jit
+    def _monarch_factored_grad_factor_kernel(
+        # Pointers
+        dw_ptr,
+        factor_ptr,
+        grad_factor_ptr,
+        recipe_ptr,
+        # Dimensions
+        block_size: tl.constexpr,
+        num_blocks: tl.constexpr,
+        num_factors: tl.constexpr,
+        # Tile sizes (autotuned)
+        BLOCK_M: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        BLOCK_P: tl.constexpr,
+    ):
+        """Reduce per-block dW into factor gradients.
+
+        For each factor f:
+          grad_f += sum over blocks b where recipe[b,0]==f: dW_b @ factor[recipe[b,1]]^T
+          grad_f += sum over blocks b where recipe[b,1]==f: factor[recipe[b,0]]^T @ dW_b
+
+        Grid: (num_factors, cdiv(block_size, BLOCK_M), cdiv(block_size, BLOCK_N))
+        """
+        factor_idx = tl.program_id(0)
+        m_tile = tl.program_id(1)
+        n_tile = tl.program_id(2)
+
+        bs2 = block_size * block_size
+
+        m_offs = m_tile * BLOCK_M + tl.arange(0, BLOCK_M)
+        n_offs = n_tile * BLOCK_N + tl.arange(0, BLOCK_N)
+        m_mask = m_offs < block_size
+        n_mask = n_offs < block_size
+
+        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+        for b in range(num_blocks):
+            left_idx = tl.load(recipe_ptr + b * 2).to(tl.int64)
+            right_idx = tl.load(recipe_ptr + b * 2 + 1).to(tl.int64)
+
+            # Scalar masks: 1.0 if this factor participates, else 0.0
+            left_scale = tl.where(left_idx == factor_idx, 1.0, 0.0)
+            right_scale = tl.where(right_idx == factor_idx, 1.0, 0.0)
+
+            for p_start in range(0, block_size, BLOCK_P):
+                p_offs = p_start + tl.arange(0, BLOCK_P)
+                p_mask = p_offs < block_size
+
+                # Left factor: grad_L[m, n] += dW[b, m, p] @ R[right, n, p]^T
+                dw_mp = tl.load(
+                    dw_ptr + b * bs2 + m_offs[:, None] * block_size + p_offs[None, :],
+                    mask=m_mask[:, None] & p_mask[None, :],
+                    other=0.0,
+                )
+                r_np = tl.load(
+                    factor_ptr + right_idx * bs2
+                    + n_offs[:, None] * block_size + p_offs[None, :],
+                    mask=n_mask[:, None] & p_mask[None, :],
+                    other=0.0,
+                )
+                # (BLOCK_M, BLOCK_P) @ (BLOCK_P, BLOCK_N)
+                acc += tl.dot(dw_mp, tl.trans(r_np)) * left_scale
+
+                # Right factor: grad_R[m, n] += L[left, p, m]^T @ dW[b, p, n]
+                l_pm = tl.load(
+                    factor_ptr + left_idx * bs2
+                    + p_offs[:, None] * block_size + m_offs[None, :],
+                    mask=p_mask[:, None] & m_mask[None, :],
+                    other=0.0,
+                )
+                dw_pn = tl.load(
+                    dw_ptr + b * bs2 + p_offs[:, None] * block_size + n_offs[None, :],
+                    mask=p_mask[:, None] & n_mask[None, :],
+                    other=0.0,
+                )
+                # (BLOCK_M, BLOCK_P) @ (BLOCK_P, BLOCK_N)
+                acc += tl.dot(tl.trans(l_pm), dw_pn) * right_scale
+
+        tl.store(
+            grad_factor_ptr + factor_idx * bs2
+            + m_offs[:, None] * block_size + n_offs[None, :],
+            acc,
+            mask=m_mask[:, None] & n_mask[None, :],
+        )
+
 
 # =========================================================================== #
 #  Autograd Function                                                           #
@@ -527,4 +857,188 @@ def monarch_linear_fused(
     return MonarchLinearFusedFn.apply(
         input, weight_stack, perm_in, perm_out, bias,
         num_blocks, block_in, block_out,
+    )
+
+
+# =========================================================================== #
+#  Factored Autograd Function                                                  #
+# =========================================================================== #
+
+class MonarchLinearFactoredFusedFn(torch.autograd.Function):
+    """Custom autograd for factored Monarch: blocks = factor[left] @ factor[right]."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        input: torch.Tensor,
+        factor_stack: torch.Tensor,
+        block_recipe: torch.Tensor,
+        perm_in: torch.Tensor,
+        perm_out: torch.Tensor,
+        bias: Optional[torch.Tensor],
+        num_blocks: int,
+        num_factors: int,
+        block_size: int,
+    ) -> torch.Tensor:
+        """
+        Args:
+            input:        (batch, in_features)
+            factor_stack: (num_factors, block_size, block_size)
+            block_recipe: (num_blocks * 2,) int32 flat [left0, right0, left1, right1, ...]
+            perm_in:      (in_features,) int32
+            perm_out:     (out_features,) int32
+            bias:         (out_features,) or None
+        """
+        if not input.is_contiguous():
+            input = input.contiguous()
+        if not factor_stack.is_contiguous():
+            factor_stack = factor_stack.contiguous()
+
+        batch, in_features = input.shape
+        out_features = num_blocks * block_size
+
+        output = torch.empty(batch, out_features, device=input.device, dtype=input.dtype)
+
+        grid = lambda META: (
+            num_blocks,
+            math.ceil(batch / META["BLOCK_BATCH"]),
+            math.ceil(block_size / META["BLOCK_N"]),
+        )
+
+        _monarch_factored_forward_kernel[grid](
+            input, output, factor_stack, block_recipe,
+            perm_in, perm_out,
+            bias if bias is not None else input,
+            batch, in_features, out_features,
+            block_size=block_size,
+            num_blocks=num_blocks,
+            HAS_BIAS=bias is not None,
+        )
+
+        ctx.save_for_backward(input, factor_stack, block_recipe, perm_in, perm_out, bias)
+        ctx.num_blocks = num_blocks
+        ctx.num_factors = num_factors
+        ctx.block_size = block_size
+
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        input, factor_stack, block_recipe, perm_in, perm_out, bias = ctx.saved_tensors
+        num_blocks = ctx.num_blocks
+        num_factors = ctx.num_factors
+        block_size = ctx.block_size
+        batch, in_features = input.shape
+        out_features = num_blocks * block_size
+
+        if not grad_output.is_contiguous():
+            grad_output = grad_output.contiguous()
+        if not input.is_contiguous():
+            input = input.contiguous()
+
+        grad_input = torch.empty_like(input)
+        grad_bias = None
+
+        # --- grad_input: reconstruct W from factors on-the-fly ---
+        grid_gi = lambda META: (
+            num_blocks,
+            math.ceil(batch / META["BLOCK_BATCH"]),
+            math.ceil(block_size / META["BLOCK_N"]),
+        )
+
+        _monarch_factored_backward_input_kernel[grid_gi](
+            grad_output, grad_input, factor_stack, block_recipe,
+            perm_in, perm_out,
+            batch, in_features, out_features,
+            block_size=block_size,
+            num_blocks=num_blocks,
+        )
+
+        # --- grad_factor: first compute per-block dW, then reduce ---
+        # Step 1: Compute dW into temp buffer using the standard backward weight kernel
+        grad_weight_temp = torch.empty(
+            num_blocks, block_size, block_size,
+            device=input.device, dtype=torch.float32,
+        )
+
+        grid_gw = lambda META: (
+            num_blocks,
+            math.ceil(block_size / META["BLOCK_M"]),
+            math.ceil(block_size / META["BLOCK_N"]),
+        )
+
+        _monarch_backward_weight_kernel[grid_gw](
+            grad_output, input, grad_weight_temp,
+            perm_in, perm_out,
+            batch, in_features, out_features,
+            block_in=block_size,
+            block_out=block_size,
+            num_blocks=num_blocks,
+        )
+
+        # Step 2: Reduce dW into factor gradients
+        grad_factor = torch.zeros_like(factor_stack)
+
+        grid_gf = lambda META: (
+            num_factors,
+            math.ceil(block_size / META["BLOCK_M"]),
+            math.ceil(block_size / META["BLOCK_N"]),
+        )
+
+        _monarch_factored_grad_factor_kernel[grid_gf](
+            grad_weight_temp, factor_stack, grad_factor, block_recipe,
+            block_size=block_size,
+            num_blocks=num_blocks,
+            num_factors=num_factors,
+        )
+
+        del grad_weight_temp
+
+        # --- grad_bias ---
+        if bias is not None:
+            grad_bias = grad_output.sum(dim=0)
+
+        # Return grads for: input, factor_stack, block_recipe, perm_in, perm_out,
+        #                    bias, num_blocks, num_factors, block_size
+        return grad_input, grad_factor, None, None, None, grad_bias, None, None, None
+
+
+# =========================================================================== #
+#  Factored public convenience function                                        #
+# =========================================================================== #
+
+def monarch_linear_factored_fused(
+    input: torch.Tensor,
+    factor_stack: torch.Tensor,
+    block_recipe: torch.Tensor,
+    perm_in: torch.Tensor,
+    perm_out: torch.Tensor,
+    bias: Optional[torch.Tensor],
+    num_blocks: int,
+    num_factors: int,
+    block_size: int,
+) -> torch.Tensor:
+    """Fused factored MonarchLinear forward (and backward via autograd).
+
+    Args:
+        input:        (batch, in_features) or (in_features,).
+        factor_stack: (num_factors, block_size, block_size).
+        block_recipe: (num_blocks * 2,) int32 flat.
+        perm_in:      (in_features,) int32.
+        perm_out:     (out_features,) int32.
+        bias:         (out_features,) or None.
+        num_blocks:   Number of diagonal blocks.
+        num_factors:  Number of factor matrices.
+        block_size:   Size of each square block.
+
+    Returns:
+        (batch, out_features) tensor.
+    """
+    if not HAS_TRITON:
+        raise RuntimeError(
+            "monarch_linear_factored_fused requires Triton (pip install triton)"
+        )
+    return MonarchLinearFactoredFusedFn.apply(
+        input, factor_stack, block_recipe, perm_in, perm_out, bias,
+        num_blocks, num_factors, block_size,
     )

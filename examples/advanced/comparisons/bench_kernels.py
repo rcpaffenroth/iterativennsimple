@@ -162,10 +162,34 @@ def run_kernel_bench(args):
         if r:
             results["L+S"] = r
 
+        # 7. Factored Monarch — Fused Triton
+        if dim == block_size * num_blocks:  # only for square layers
+            def _build_factored_fused():
+                m = MonarchLinear.from_uniform_blocks(
+                    dim, dim, num_blocks=num_blocks, bias=True, seed=0,
+                    factored=True,
+                ).to(device).train()
+                return _ForwardWrapper(m, use_fused=True)
+            r = _try_benchmark("Factored-Fused", _build_factored_fused, x, args.warmup, args.rounds)
+            if r:
+                results["Factored-Fused"] = r
+
+            # 8. Factored Monarch — BMM (materialize weights then bmm)
+            def _build_factored_bmm():
+                m = MonarchLinear.from_uniform_blocks(
+                    dim, dim, num_blocks=num_blocks, bias=True, seed=0,
+                    factored=True,
+                ).to(device).train()
+                return _ForwardWrapper(m, use_fused=False, use_views=False)
+            r = _try_benchmark("Factored-BMM", _build_factored_bmm, x, args.warmup, args.rounds)
+            if r:
+                results["Factored-BMM"] = r
+
         # Print results for this config
         dense_total = results.get("Dense", {}).get("total_ms", float("inf"))
         first = True
-        for path_name in ["Dense", "Fused", "BMM", "Auto", "L+S"]:
+        for path_name in ["Dense", "Fused", "BMM", "Auto", "L+S",
+                          "Factored-Fused", "Factored-BMM"]:
             if path_name not in results:
                 continue
             r = results[path_name]

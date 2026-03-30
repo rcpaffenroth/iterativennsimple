@@ -52,7 +52,7 @@ if _comparisons_dir not in sys.path:
 from data import load_wikitext, create_dataloaders
 from llama_models import (
     build_llama_model, LLAMA_ALL_MODEL_NAMES, LLAMA_CONFIGS, LLAMA_LS_CONFIGS,
-    LSLinear3D,
+    LLAMA_FACTORED_CONFIGS, LSLinear3D, MonarchLinear3D,
 )
 
 # Reuse bench_utils from advanced comparisons
