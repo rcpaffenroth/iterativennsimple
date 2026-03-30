@@ -55,9 +55,9 @@ LLAMA_LS_CONFIGS = {
 }
 
 LLAMA_FACTORED_CONFIGS = {
-    "small": dict(num_blocks=4),
-    "medium": dict(num_blocks=16),
-    "large": dict(num_blocks=16),
+    "small": dict(num_blocks=16, chain_length=4),
+    "medium": dict(num_blocks=16, chain_length=4),
+    "large": dict(num_blocks=16, chain_length=4),
 }
 
 LLAMA_ALL_MODEL_NAMES = ["standard", "ls", "factored"]
@@ -93,19 +93,18 @@ def _make_linear_factory(bias: bool = False):
     return factory
 
 
-def _make_factored_factory(num_blocks: int, bias: bool = False):
+def _make_factored_factory(num_blocks: int, chain_length: int = 2, bias: bool = False):
     """Return a linear_factory callable that produces factored MonarchLinear3D layers.
 
-    Factored mode requires square layers (in_f == out_f). For non-square
-    projections (e.g. d_model -> d_ff), falls back to standard nn.Linear.
+    Uses chain-factored blocks: k^m blocks from k factor matrices, where
+    k = ceil(num_blocks^(1/m)) and m = chain_length.  Non-square projections
+    use a shared adapter matrix for the dimension mismatch.
     """
     def factory(in_f: int, out_f: int) -> nn.Module:
-        if in_f != out_f:
-            # Factored requires square blocks; fall back to nn.Linear for non-square
-            return nn.Linear(in_f, out_f, bias=bias)
         nb = _find_common_num_blocks(in_f, out_f, num_blocks)
         m = MonarchLinear.from_uniform_blocks(
-            in_f, out_f, num_blocks=nb, bias=bias, factored=True,
+            in_f, out_f, num_blocks=nb, bias=bias,
+            factored=True, chain_length=chain_length,
         )
         return MonarchLinear3D(m)
     return factory
@@ -554,7 +553,8 @@ def build_ls_llama(
 
 def build_factored_llama(
     vocab_size: int,
-    num_blocks: int = 4,
+    num_blocks: int = 16,
+    chain_length: int = 4,
     d_model: int = 256,
     n_layers: int = 6,
     n_heads: int = 8,
@@ -564,10 +564,10 @@ def build_factored_llama(
     dropout: float = 0.0,
     **kwargs,
 ) -> Llama:
-    """Build a Llama with factored MonarchLinear replacing square linear projections.
+    """Build a Llama with chain-factored MonarchLinear replacing all projections.
 
-    Non-square projections (e.g. d_model -> d_ff in SwiGLU) fall back to nn.Linear
-    since factored mode requires square blocks.
+    Uses k^m blocks from k factor matrices (exponential parameter savings).
+    Non-square projections use a shared adapter matrix.
     """
     return Llama(
         vocab_size=vocab_size,
@@ -578,7 +578,7 @@ def build_factored_llama(
         d_ff=d_ff,
         context_len=context_len,
         dropout=dropout,
-        linear_factory=_make_factored_factory(num_blocks, bias=False),
+        linear_factory=_make_factored_factory(num_blocks, chain_length, bias=False),
     )
 
 
@@ -608,7 +608,7 @@ def build_llama_model(name: str, vocab_size: int, config_name: str = "small", **
 
     elif name == "factored":
         f_cfg = dict(LLAMA_FACTORED_CONFIGS.get(config_name, LLAMA_FACTORED_CONFIGS["small"]))
-        f_cfg.update({k: v for k, v in overrides.items() if k in ("num_blocks",)})
+        f_cfg.update({k: v for k, v in overrides.items() if k in ("num_blocks", "chain_length")})
         cfg.update(f_cfg)
         return build_factored_llama(vocab_size=vocab_size, **cfg)
 

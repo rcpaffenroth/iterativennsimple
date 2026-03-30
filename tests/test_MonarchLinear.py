@@ -534,3 +534,162 @@ def test_rectangular():
     y_dense = x @ S.T + layer.bias
     assert torch.allclose(y, y_dense, atol=1e-5), \
         f"rectangular: max diff {(y - y_dense).abs().max().item()}"
+
+
+# ---------------------------------------------------------------------------
+# Chain-factored block tests
+# ---------------------------------------------------------------------------
+
+def test_chain_length_3_square():
+    """chain_length=3 with square blocks: 3^3=27 blocks from 3 factors."""
+    dim = 27 * 4  # 108, so each block is 4×4
+    layer = MonarchLinear.from_uniform_blocks(
+        dim, dim, num_blocks=27, factored=True, chain_length=3, bias=True, seed=42,
+    )
+    assert layer.chain_length == 3
+    assert layer.num_factors == 3
+    assert layer.factor_stack.shape == (3, 4, 4)
+    assert layer.adapter is None
+    x = torch.randn(8, dim)
+    y = layer(x)
+    assert y.shape == (8, dim)
+    # Verify forward matches dense
+    S = layer.to_dense()
+    y_dense = x @ S.T + layer.bias
+    assert torch.allclose(y, y_dense, atol=1e-5), \
+        f"chain_length=3 forward mismatch: {(y - y_dense).abs().max().item()}"
+
+
+def test_chain_length_4_square():
+    """chain_length=4 with square blocks: 2^4=16 blocks from 2 factors."""
+    dim = 16 * 4  # 64
+    layer = MonarchLinear.from_uniform_blocks(
+        dim, dim, num_blocks=16, factored=True, chain_length=4, bias=True, seed=42,
+    )
+    assert layer.chain_length == 4
+    assert layer.num_factors == 2
+    assert layer.factor_stack.shape == (2, 4, 4)
+    x = torch.randn(8, dim)
+    y = layer(x)
+    S = layer.to_dense()
+    y_dense = x @ S.T + layer.bias
+    assert torch.allclose(y, y_dense, atol=1e-5)
+
+
+def test_chain_factored_rectangular_wide():
+    """Factored rectangular (block_out < block_in) with adapter at end."""
+    # 64→32, 4 blocks: block_in=16, block_out=8, s=min(8,16)=8
+    layer = MonarchLinear.from_uniform_blocks(
+        64, 32, num_blocks=4, factored=True, chain_length=2, bias=True, seed=42,
+    )
+    assert layer._factored
+    assert layer._factor_size == 8
+    assert layer._adapter_position == "end"
+    assert layer.adapter is not None
+    assert layer.adapter.shape == (8, 16)
+    assert layer.factor_stack.shape == (2, 8, 8)
+    x = torch.randn(8, 64)
+    y = layer(x)
+    assert y.shape == (8, 32)
+    S = layer.to_dense()
+    y_dense = x @ S.T + layer.bias
+    assert torch.allclose(y, y_dense, atol=1e-5), \
+        f"wide rect mismatch: {(y - y_dense).abs().max().item()}"
+
+
+def test_chain_factored_rectangular_tall():
+    """Factored rectangular (block_out > block_in) with adapter at start."""
+    # 32→64, 4 blocks: block_in=8, block_out=16, s=min(16,8)=8
+    layer = MonarchLinear.from_uniform_blocks(
+        32, 64, num_blocks=4, factored=True, chain_length=2, bias=True, seed=42,
+    )
+    assert layer._adapter_position == "start"
+    assert layer.adapter.shape == (16, 8)
+    assert layer.factor_stack.shape == (2, 8, 8)
+    x = torch.randn(8, 32)
+    y = layer(x)
+    assert y.shape == (8, 64)
+    S = layer.to_dense()
+    y_dense = x @ S.T + layer.bias
+    assert torch.allclose(y, y_dense, atol=1e-5), \
+        f"tall rect mismatch: {(y - y_dense).abs().max().item()}"
+
+
+def test_chain_factored_rectangular_chain3():
+    """Rectangular blocks with chain_length=3."""
+    # 128→64, 8 blocks: block_in=16, block_out=8, s=8
+    # 8 = 2^3 → num_factors=2, chain_length=3
+    layer = MonarchLinear.from_uniform_blocks(
+        128, 64, num_blocks=8, factored=True, chain_length=3, bias=True, seed=42,
+    )
+    assert layer.chain_length == 3
+    assert layer.num_factors == 2
+    assert layer._adapter_position == "end"
+    assert layer.adapter.shape == (8, 16)
+    assert layer.factor_stack.shape == (2, 8, 8)
+    x = torch.randn(8, 128)
+    y = layer(x)
+    S = layer.to_dense()
+    y_dense = x @ S.T + layer.bias
+    assert torch.allclose(y, y_dense, atol=1e-5)
+
+
+def test_gradient_chain_length_3():
+    """Gradients flow through chain_length=3 factor chain."""
+    dim = 27 * 4
+    layer = MonarchLinear.from_uniform_blocks(
+        dim, dim, num_blocks=27, factored=True, chain_length=3, bias=True, seed=42,
+    )
+    x = torch.randn(8, dim)
+    loss = layer(x).sum()
+    loss.backward()
+    assert layer.factor_stack.grad is not None
+    assert layer.factor_stack.grad.shape == layer.factor_stack.shape
+    assert layer.bias.grad is not None
+
+
+def test_gradient_rectangular_adapter():
+    """Gradients flow to both factor_stack and adapter for rectangular blocks."""
+    layer = MonarchLinear.from_uniform_blocks(
+        64, 32, num_blocks=4, factored=True, chain_length=2, bias=True, seed=42,
+    )
+    x = torch.randn(8, 64)
+    loss = layer(x).sum()
+    loss.backward()
+    assert layer.factor_stack.grad is not None
+    assert layer.adapter.grad is not None
+    assert layer.bias.grad is not None
+
+
+def test_parameter_savings_chain_3():
+    """chain_length=3 gives dramatic savings: 3 factors vs 27 blocks."""
+    dim = 27 * 4
+    factored = MonarchLinear.from_uniform_blocks(
+        dim, dim, num_blocks=27, factored=True, chain_length=3, seed=1,
+    )
+    unfactored = MonarchLinear.from_uniform_blocks(
+        dim, dim, num_blocks=27, factored=False, seed=1,
+    )
+    # 3 factors of 4×4 = 48 vs 27 blocks of 4×4 = 432
+    assert factored.number_of_trainable_parameters() == 3 * 4 * 4
+    assert unfactored.number_of_trainable_parameters() == 27 * 4 * 4
+    assert factored.number_of_trainable_parameters() < unfactored.number_of_trainable_parameters()
+
+
+def test_parameter_count_rectangular_adapter():
+    """Rectangular factored: factors + adapter counted correctly."""
+    # 64→32, 4 blocks, chain_length=2: 2 factors of 8×8 + adapter 8×16 + bias 32
+    layer = MonarchLinear.from_uniform_blocks(
+        64, 32, num_blocks=4, factored=True, chain_length=2, bias=True, seed=42,
+    )
+    expected = 2 * 8 * 8 + 8 * 16 + 32  # factors + adapter + bias
+    assert layer.number_of_trainable_parameters() == expected
+
+
+def test_backward_compat_default_chain_length():
+    """Default chain_length=2 gives same behavior as before."""
+    layer = MonarchLinear.from_uniform_blocks(
+        64, 64, num_blocks=4, factored=True, seed=42,
+    )
+    assert layer.chain_length == 2
+    assert layer.num_factors == 2

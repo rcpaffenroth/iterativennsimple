@@ -459,3 +459,72 @@ def test_factored_fallback_on_cpu():
     x = torch.randn(8, 64)
     y = layer(x)
     assert y.shape == (8, 64)
+
+
+# ===========================================================================
+# Chain-factored GPU tests (chain_length > 2 and rectangular)
+# ===========================================================================
+
+@requires_fused
+def test_chain_length_3_bmm_fallback():
+    """chain_length=3 should fall back from fused to BMM, results still correct."""
+    dim = 8 * 16  # 128: 8 blocks of 16x16, 2 factors with chain_length=3
+    layer = MonarchLinear.from_uniform_blocks(
+        dim, dim, num_blocks=8, factored=True, chain_length=3, seed=1,
+    ).to("cuda")
+    x = torch.randn(16, dim, device="cuda")
+    # chain_length > 2 → fused disabled
+    assert not layer._can_use_fused(x)
+    y = layer(x)
+    S = layer.to_dense()
+    y_dense = x @ S.T
+    assert torch.allclose(y, y_dense, atol=3e-3), \
+        f"chain_length=3 GPU mismatch: {(y - y_dense).abs().max().item()}"
+
+
+@requires_fused
+def test_rectangular_factored_gpu():
+    """Rectangular factored blocks work on GPU via BMM materialization."""
+    layer = MonarchLinear.from_uniform_blocks(
+        128, 64, num_blocks=4, factored=True, chain_length=2, bias=True, seed=1,
+    ).to("cuda")
+    x = torch.randn(16, 128, device="cuda")
+    # non-square factored → fused disabled
+    assert not layer._can_use_fused(x)
+    y = layer(x)
+    S = layer.to_dense()
+    y_dense = x @ S.T + layer.bias
+    assert torch.allclose(y, y_dense, atol=3e-3), \
+        f"rectangular GPU mismatch: {(y - y_dense).abs().max().item()}"
+
+
+@requires_fused
+def test_rectangular_gradient_gpu():
+    """Gradients flow through adapter on GPU."""
+    layer = MonarchLinear.from_uniform_blocks(
+        128, 64, num_blocks=4, factored=True, chain_length=2, bias=True, seed=1,
+    ).to("cuda")
+    x = torch.randn(16, 128, device="cuda")
+    loss = layer(x).sum()
+    loss.backward()
+    assert layer.factor_stack.grad is not None
+    assert layer.adapter.grad is not None
+    assert layer.bias.grad is not None
+
+
+@requires_fused
+def test_chain3_rectangular_gpu():
+    """chain_length=3 with rectangular blocks on GPU."""
+    # 128→64, 8 blocks: 2 factors, chain_length=3
+    layer = MonarchLinear.from_uniform_blocks(
+        128, 64, num_blocks=8, factored=True, chain_length=3, bias=True, seed=1,
+    ).to("cuda")
+    x = torch.randn(8, 128, device="cuda")
+    y = layer(x)
+    S = layer.to_dense()
+    y_dense = x @ S.T + layer.bias
+    assert torch.allclose(y, y_dense, atol=3e-3)
+    # Gradient flow
+    y.sum().backward()
+    assert layer.factor_stack.grad is not None
+    assert layer.adapter.grad is not None

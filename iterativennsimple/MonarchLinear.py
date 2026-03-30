@@ -1,3 +1,4 @@
+import itertools
 import math
 import logging
 from typing import Any, TYPE_CHECKING
@@ -44,22 +45,36 @@ class _UniformBlockAccessor:
 class _FactoredBlockAccessor:
     """Read-only list-like accessor that materializes blocks from factors on demand.
 
-    For factored mode, block[i] = factor_stack[recipe[i,0]] @ factor_stack[recipe[i,1]].
+    For factored mode with chain_length m, block[i] is the product of m factors
+    from ``factor_stack`` indexed by ``recipe[i]``, optionally multiplied by a
+    shared adapter matrix for non-square blocks.
+
     These are NOT views — mutations will not write through to factor_stack.
     """
 
-    __slots__ = ("_fs", "_recipe")
+    __slots__ = ("_fs", "_recipe", "_chain_length", "_adapter", "_adapter_position")
 
-    def __init__(self, factor_stack: nn.Parameter, block_recipe: torch.Tensor):
+    def __init__(self, factor_stack: nn.Parameter, block_recipe: torch.Tensor,
+                 chain_length: int, adapter, adapter_position):
         self._fs = factor_stack
-        self._recipe = block_recipe
+        self._recipe = block_recipe           # (num_blocks, chain_length)
+        self._chain_length = chain_length
+        self._adapter = adapter               # Parameter or None
+        self._adapter_position = adapter_position  # "start", "end", or None
 
     def __len__(self) -> int:
         return self._recipe.shape[0]
 
     def __getitem__(self, idx):
-        left, right = self._recipe[idx]
-        return self._fs[left] @ self._fs[right]
+        indices = self._recipe[idx]           # (chain_length,)
+        result = self._fs[indices[0]]
+        for j in range(1, self._chain_length):
+            result = result @ self._fs[indices[j]]
+        if self._adapter_position == "end":
+            result = result @ self._adapter
+        elif self._adapter_position == "start":
+            result = self._adapter @ result
+        return result
 
     def __iter__(self):
         for i in range(len(self)):
@@ -135,6 +150,7 @@ class MonarchLinear(nn.Module):
         bias: bool = True,
         force_loop_matmul: bool = False,
         factored: bool = True,
+        chain_length: int = 2,
         device=None,
         dtype=None,
     ) -> None:
@@ -174,32 +190,42 @@ class MonarchLinear(nn.Module):
         )
 
         # --- Factored block mode ---
-        # Factored requires uniform square blocks.  When factored=True is
-        # requested but blocks are non-square or non-uniform, we silently
-        # fall back to unfactored so that callers don't need to check.
-        _can_factor = (
-            factored
-            and self._uniform
-            and block_in_features[0] == block_out_features[0]
-        )
+        # Factored requires uniform blocks.  When factored=True is requested
+        # but blocks are non-uniform, we silently fall back to unfactored.
+        # Non-square blocks are now supported via a shared adapter matrix.
+        _can_factor = factored and self._uniform
         self._factored: bool = _can_factor
 
         if _can_factor:
             bi = block_in_features[0]
-            self.num_factors = math.ceil(math.sqrt(self.num_blocks))
+            bo = block_out_features[0]
+            s = min(bi, bo)
+            self._factor_size = s
+            self.chain_length = chain_length
+            self.num_factors = math.ceil(self.num_blocks ** (1.0 / chain_length))
             self.factor_stack = nn.Parameter(
-                torch.empty(self.num_factors, bi, bi, **factory_kwargs),
+                torch.empty(self.num_factors, s, s, **factory_kwargs),
                 requires_grad=True,
             )
-            # Build block recipe: (num_blocks, 2) mapping block_id -> (left, right)
-            recipe = []
-            for i in range(self.num_factors):
-                for j in range(self.num_factors):
-                    if len(recipe) >= self.num_blocks:
-                        break
-                    recipe.append([i, j])
-                if len(recipe) >= self.num_blocks:
-                    break
+            # Adapter for non-square blocks
+            if bo != bi:
+                # adapter shape is always (bo, bi)
+                # "end": Block = F_chain @ adapter  (bo<=bi, s=bo)
+                # "start": Block = adapter @ F_chain (bo>bi, s=bi)
+                self._adapter_position = "end" if bo <= bi else "start"
+                self.adapter = nn.Parameter(
+                    torch.empty(bo, bi, **factory_kwargs), requires_grad=True,
+                )
+            else:
+                self._adapter_position = None
+                self.register_parameter("adapter", None)
+            # Build block recipe: all permutations-with-repetition of
+            # num_factors items taken chain_length at a time, truncated
+            # to num_blocks.
+            recipe = list(itertools.islice(
+                itertools.product(range(self.num_factors), repeat=chain_length),
+                self.num_blocks,
+            ))
             recipe_tensor = torch.tensor(recipe, dtype=torch.int32).flatten()
             self.register_buffer("block_recipe", recipe_tensor)
         elif self._uniform:
@@ -207,6 +233,9 @@ class MonarchLinear(nn.Module):
             bi = block_in_features[0]
             bo = block_out_features[0]
             self.num_factors = 0
+            self.chain_length = 0
+            self._factor_size = 0
+            self._adapter_position = None
             self.weight_stack = nn.Parameter(
                 torch.empty(self.num_blocks, bo, bi, **factory_kwargs),
                 requires_grad=True,
@@ -214,6 +243,9 @@ class MonarchLinear(nn.Module):
         else:
             # Non-uniform blocks: use ParameterList (rare).
             self.num_factors = 0
+            self.chain_length = 0
+            self._factor_size = 0
+            self._adapter_position = None
             self._blocks = nn.ParameterList(
                 [
                     nn.Parameter(
@@ -253,7 +285,13 @@ class MonarchLinear(nn.Module):
         non-uniform blocks they are the underlying ParameterList entries.
         """
         if self._factored:
-            return _FactoredBlockAccessor(self.factor_stack, self.block_recipe.view(-1, 2))
+            return _FactoredBlockAccessor(
+                self.factor_stack,
+                self.block_recipe.view(-1, self.chain_length),
+                self.chain_length,
+                self.adapter,
+                self._adapter_position,
+            )
         if self._uniform:
             return _UniformBlockAccessor(self.weight_stack)
         return self._blocks
@@ -280,6 +318,8 @@ class MonarchLinear(nn.Module):
         if self._factored:
             for i in range(self.num_factors):
                 nn.init.kaiming_uniform_(self.factor_stack[i], a=math.sqrt(5))
+            if self.adapter is not None:
+                nn.init.kaiming_uniform_(self.adapter, a=math.sqrt(5))
         else:
             for block in self.blocks:
                 nn.init.kaiming_uniform_(block, a=math.sqrt(5))
@@ -337,7 +377,8 @@ class MonarchLinear(nn.Module):
         if use_views is None:
             use_views = not self._uniform
 
-        if use_fused and self._factored:
+        if use_fused and self._factored and self.chain_length == 2 and self._adapter_position is None:
+            # Optimised in-kernel Triton path: m=2 square factored blocks.
             from iterativennsimple.monarch_kernels import monarch_linear_factored_fused
 
             result = monarch_linear_factored_fused(
@@ -413,8 +454,13 @@ class MonarchLinear(nn.Module):
             return False
         if not self._uniform:
             return False
-        # Factored mode works well with fewer blocks (the fused kernel is
-        # always beneficial since it avoids materializing the weight stack).
+        # Factored mode with chain_length > 2 or non-square adapter: the
+        # in-kernel Triton path only supports m=2 square.  Fall back to BMM
+        # which materializes the weight stack differentiably.
+        if self._factored and (self.chain_length != 2 or self._adapter_position is not None):
+            return False
+        # Factored mode (m=2 square) works well with fewer blocks (the fused
+        # kernel avoids materializing the weight stack).
         if not self._factored and self.num_blocks < 8:
             return False
         # At large batch × block_size, cuBLAS backward dominates our Triton
@@ -430,18 +476,31 @@ class MonarchLinear(nn.Module):
             return False
 
     def _materialize_weight_stack(self) -> torch.Tensor:
-        """Materialize (num_blocks, block_size, block_size) from factor_stack.
+        """Materialize (num_blocks, block_out, block_in) from factor chain + adapter.
 
-        Used by the BMM and views fallback paths. Not needed for the fused
-        Triton path which reconstructs weights on-the-fly.
+        Fully differentiable — autograd traces through the bmm chain to compute
+        gradients for factor_stack and adapter automatically.
+
+        Used by the BMM and views fallback paths.  Not needed for the m=2
+        square fused Triton path which reconstructs weights on-the-fly.
         """
-        recipe = self.block_recipe.view(-1, 2)
-        # Use torch.bmm on the factor pairs for efficiency
-        left_indices = recipe[:, 0].long()
-        right_indices = recipe[:, 1].long()
-        L = self.factor_stack[left_indices]   # (num_blocks, bs, bs)
-        R = self.factor_stack[right_indices]  # (num_blocks, bs, bs)
-        return torch.bmm(L, R)               # (num_blocks, bs, bs)
+        recipe = self.block_recipe.view(-1, self.chain_length)
+        # Start with the first factor in each block's chain
+        indices_0 = recipe[:, 0].long()
+        result = self.factor_stack[indices_0]  # (num_blocks, s, s)
+        # Chain-multiply remaining factors
+        for j in range(1, self.chain_length):
+            indices_j = recipe[:, j].long()
+            right = self.factor_stack[indices_j]  # (num_blocks, s, s)
+            result = torch.bmm(result, right)
+        # Apply shared adapter for non-square blocks
+        if self._adapter_position == "end":
+            adapter_exp = self.adapter.unsqueeze(0).expand(self.num_blocks, -1, -1)
+            result = torch.bmm(result, adapter_exp)  # (K, bo, bi)
+        elif self._adapter_position == "start":
+            adapter_exp = self.adapter.unsqueeze(0).expand(self.num_blocks, -1, -1)
+            result = torch.bmm(adapter_exp, result)  # (K, bo, bi)
+        return result
 
     def _block_matmul(self, x: torch.Tensor) -> torch.Tensor:
         """Apply the block-diagonal M^T to x (already permuted).
@@ -574,6 +633,8 @@ class MonarchLinear(nn.Module):
         """
         if self._factored:
             total = self.factor_stack.numel()
+            if self.adapter is not None:
+                total += self.adapter.numel()
         elif self._uniform:
             total = self.weight_stack.numel()
         else:
@@ -592,6 +653,9 @@ class MonarchLinear(nn.Module):
         if self._factored:
             parts.append(f"factored=True")
             parts.append(f"num_factors={self.num_factors}")
+            parts.append(f"chain_length={self.chain_length}")
+            if self._adapter_position is not None:
+                parts.append(f"adapter={self._adapter_position}")
         return ", ".join(parts)
 
     # ------------------------------------------------------------------
@@ -662,6 +726,7 @@ class MonarchLinear(nn.Module):
         bias: bool = False,
         force_loop_matmul: bool = False,
         factored: bool = True,
+        chain_length: int = 2,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -701,6 +766,7 @@ class MonarchLinear(nn.Module):
             bias=bias,
             force_loop_matmul=force_loop_matmul,
             factored=factored,
+            chain_length=chain_length,
             device=device,
             dtype=dtype,
         )
@@ -724,6 +790,7 @@ class MonarchLinear(nn.Module):
         bias: bool = False,
         force_loop_matmul: bool = False,
         factored: bool = True,
+        chain_length: int = 2,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -766,6 +833,7 @@ class MonarchLinear(nn.Module):
             bias=bias,
             force_loop_matmul=force_loop_matmul,
             factored=factored,
+            chain_length=chain_length,
             seed=seed,
             device=device,
             dtype=dtype,
@@ -780,6 +848,7 @@ class MonarchLinear(nn.Module):
         bias: bool = False,
         force_loop_matmul: bool = False,
         factored: bool = True,
+        chain_length: int = 2,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -851,6 +920,7 @@ class MonarchLinear(nn.Module):
             bias=bias,
             force_loop_matmul=force_loop_matmul,
             factored=factored,
+            chain_length=chain_length,
             seed=seed,
             device=device,
             dtype=dtype,
@@ -865,6 +935,7 @@ class MonarchLinear(nn.Module):
         bias: bool = False,
         force_loop_matmul: bool = False,
         factored: bool = True,
+        chain_length: int = 2,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -936,6 +1007,7 @@ class MonarchLinear(nn.Module):
             bias=bias,
             force_loop_matmul=force_loop_matmul,
             factored=factored,
+            chain_length=chain_length,
             seed=seed,
             device=device,
             dtype=dtype,
