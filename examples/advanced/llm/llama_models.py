@@ -44,6 +44,9 @@ LLAMA_CONFIGS = {
                   d_ff=688, context_len=256),
     "medium": dict(d_model=768, n_layers=12, n_heads=12, n_kv_heads=4,
                    d_ff=2048, context_len=512),
+    # xlarge: ~350M standard params — fits on 4090 (24GB) at batch=4
+    "xlarge": dict(d_model=1024, n_layers=16, n_heads=16, n_kv_heads=4,
+                   d_ff=2816, context_len=512),
     "large": dict(d_model=2048, n_layers=24, n_heads=16, n_kv_heads=4,
                   d_ff=5504, context_len=1024),
 }
@@ -51,12 +54,14 @@ LLAMA_CONFIGS = {
 LLAMA_LS_CONFIGS = {
     "small": dict(num_blocks=4, rank=16),
     "medium": dict(num_blocks=8, rank=32),
+    "xlarge": dict(num_blocks=8, rank=64),
     "large": dict(num_blocks=16, rank=64),
 }
 
 LLAMA_FACTORED_CONFIGS = {
     "small": dict(num_blocks=16, chain_length=4),
     "medium": dict(num_blocks=16, chain_length=4),
+    "xlarge": dict(num_blocks=16, chain_length=4),
     "large": dict(num_blocks=16, chain_length=4),
 }
 

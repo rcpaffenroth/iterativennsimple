@@ -32,7 +32,9 @@ dev = [
     "nbmake==1.5.*",
 ]
 cuda = [
-    "triton>=3.0.0",
+    "torch>=2.5.1; sys_platform == 'linux'",
+    "torchvision>=0.20.0; sys_platform == 'linux'",
+    "triton>=3.0.0; sys_platform == 'linux'",
 ]
 llm = [
     "tiktoken>=0.5.0",
@@ -58,6 +60,16 @@ environments = [
     "sys_platform == 'linux'",
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
+# blackwell extra uses nightly cu128; default uses stable cu124 — mutually exclusive
+conflicts = [[
+    { extra = "blackwell" },
+    { extra = "cuda" },
+]]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-nightly-cu128"
@@ -68,12 +80,15 @@ explicit = true
 generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", rev = "release/v0.4.0" }
 torch = [
     { index = "pytorch-nightly-cu128", extra = "blackwell", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu124", extra = "cuda", marker = "sys_platform == 'linux'" },
 ]
 torchvision = [
     { index = "pytorch-nightly-cu128", extra = "blackwell", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu124", extra = "cuda", marker = "sys_platform == 'linux'" },
 ]
 triton = [
     { index = "pytorch-nightly-cu128", extra = "blackwell", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu124", extra = "cuda", marker = "sys_platform == 'linux'" },
 ]
 
 [build-system]

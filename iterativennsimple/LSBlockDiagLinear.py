@@ -109,12 +109,15 @@ class LSBlockDiagLinear(nn.Module):
         rank: int,
         bias: bool = True,
         stride_perm: bool = False,
+        factored: bool = False,
+        chain_length: int = 2,
         device=None,
         dtype=None,
     ) -> "LSBlockDiagLinear":
         sparse = BlockDiagLinear(
             in_features, out_features, num_blocks,
             bias=False, stride_perm=stride_perm,
+            factored=factored, chain_length=chain_length,
             device=device, dtype=dtype,
         )
         return LSBlockDiagLinear(sparse, rank=rank, bias=bias, device=device, dtype=dtype)

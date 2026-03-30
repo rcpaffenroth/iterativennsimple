@@ -23,9 +23,12 @@ import torch.nn as nn
 # Setup paths
 _this_dir = os.path.dirname(os.path.abspath(__file__))
 _root = os.path.join(_this_dir, "..", "..")
+_advanced_llm = os.path.join(_this_dir, "..", "advanced", "llm")
 sys.path.insert(0, _root)
 if _this_dir not in sys.path:
     sys.path.insert(0, _this_dir)
+if _advanced_llm not in sys.path:
+    sys.path.insert(0, _advanced_llm)
 
 from iterativennsimple.MonarchLinear import MonarchLinear
 from iterativennsimple.LSLinear import LSLinear
@@ -60,15 +63,15 @@ def benchmark_layer(layer, x, label, warmup=10, iters=100, backward=True):
     elapsed = (time.time() - t0) / iters * 1000  # ms
 
     params = layer.number_of_trainable_parameters() if hasattr(layer, 'number_of_trainable_parameters') else sum(p.numel() for p in layer.parameters())
-    print(f"  {label:40s}  {elapsed:7.2f} ms  params={params:>10,}")
+    print(f"  {label:45s}  {elapsed:7.2f} ms  params={params:>10,}")
     return elapsed
 
 
 def layer_benchmark():
     """Microbenchmark individual layers at Llama medium dimensions."""
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 90)
     print(" LAYER-LEVEL SPEED BENCHMARK")
-    print("=" * 80)
+    print("=" * 90)
 
     device = torch.device("cuda")
     batch = 32 * 512  # batch_size * context_len (flattened for 2D layers)
@@ -90,65 +93,79 @@ def layer_benchmark():
 
         # 1. Standard nn.Linear
         linear = nn.Linear(in_f, out_f, bias=False)
-        benchmark_layer(linear, x, f"nn.Linear")
+        baseline = benchmark_layer(linear, x, f"nn.Linear")
         del linear; gc.collect(); torch.cuda.empty_cache()
 
-        # 2. MonarchLinear (with permutations, BMM path)
-        monarch = MonarchLinear.from_uniform_blocks(in_f, out_f, num_blocks, bias=False)
-        benchmark_layer(monarch, x, f"MonarchLinear (BMM, perm)")
-        del monarch; gc.collect(); torch.cuda.empty_cache()
-
-        # 3. MonarchLinear (with permutations, Triton fused)
-        monarch = MonarchLinear.from_uniform_blocks(in_f, out_f, num_blocks, bias=False)
-        try:
-            # Force fused path
-            class FusedWrapper(nn.Module):
-                def __init__(self, m):
-                    super().__init__()
-                    self.m = m
-                def forward(self, x):
-                    return self.m(x, use_fused=True)
-                def number_of_trainable_parameters(self):
-                    return self.m.number_of_trainable_parameters()
-            fw = FusedWrapper(monarch)
-            benchmark_layer(fw, x, f"MonarchLinear (Triton fused)")
-            del fw
-        except Exception as e:
-            print(f"  MonarchLinear (Triton fused): SKIPPED ({e})")
-        del monarch; gc.collect(); torch.cuda.empty_cache()
-
-        # 4. BlockDiagLinear (no permutations, contiguous)
+        # 2. BlockDiagLinear (no permutations, contiguous)
         bd = BlockDiagLinear(in_f, out_f, num_blocks, bias=False, stride_perm=False)
         benchmark_layer(bd, x, f"BlockDiagLinear (contiguous)")
         del bd; gc.collect(); torch.cuda.empty_cache()
 
-        # 5. BlockDiagLinear (contiguous, compiled)
+        # 3. BlockDiagLinear (contiguous, compiled)
         bd = BlockDiagLinear(in_f, out_f, num_blocks, bias=False, stride_perm=False).cuda()
         bd_compiled = torch.compile(bd)
         benchmark_layer(bd_compiled, x, f"BlockDiagLinear (contig+compile)")
         del bd, bd_compiled; gc.collect(); torch.cuda.empty_cache()
 
-        # 6. nn.Linear (compiled, for fair comparison)
+        # 4. BlockDiagLinear (factored, chain_length=2)
+        bd_f = BlockDiagLinear(in_f, out_f, num_blocks, bias=False, factored=True, chain_length=2)
+        benchmark_layer(bd_f, x, f"BlockDiagLinear (factored, m=2)")
+        del bd_f; gc.collect(); torch.cuda.empty_cache()
+
+        # 5. BlockDiagLinear (factored, chain_length=3)
+        bd_f3 = BlockDiagLinear(in_f, out_f, num_blocks, bias=False, factored=True, chain_length=3)
+        benchmark_layer(bd_f3, x, f"BlockDiagLinear (factored, m=3)")
+        del bd_f3; gc.collect(); torch.cuda.empty_cache()
+
+        # 5b. BlockDiagLinear (factored+compiled, m=2)
+        bd_fc = BlockDiagLinear(in_f, out_f, num_blocks, bias=False, factored=True, chain_length=2).cuda()
+        bd_fc_compiled = torch.compile(bd_fc)
+        benchmark_layer(bd_fc_compiled, x, f"BlockDiagLinear (factored+compile, m=2)")
+        del bd_fc, bd_fc_compiled; gc.collect(); torch.cuda.empty_cache()
+
+        # 6. LSBlockDiagLinear (BlockDiag + low-rank, contiguous)
+        lsbd = LSBlockDiagLinear.from_uniform_blocks(in_f, out_f, num_blocks, rank=rank, bias=False, stride_perm=False)
+        benchmark_layer(lsbd, x, f"LSBlockDiagLinear (contig+LR)")
+        del lsbd; gc.collect(); torch.cuda.empty_cache()
+
+        # 7. LSBlockDiagLinear (contig, compiled)
+        lsbd = LSBlockDiagLinear.from_uniform_blocks(in_f, out_f, num_blocks, rank=rank, bias=False, stride_perm=False).cuda()
+        lsbd_compiled = torch.compile(lsbd)
+        benchmark_layer(lsbd_compiled, x, f"LSBlockDiagLinear (contig+compile)")
+        del lsbd, lsbd_compiled; gc.collect(); torch.cuda.empty_cache()
+
+        # 8. LSBlockDiagLinear (factored BlockDiag + low-rank)
+        lsbd_f = LSBlockDiagLinear.from_uniform_blocks(
+            in_f, out_f, num_blocks, rank=rank, bias=False,
+            factored=True, chain_length=2,
+        )
+        benchmark_layer(lsbd_f, x, f"LSBlockDiagLinear (factored+LR)")
+        del lsbd_f; gc.collect(); torch.cuda.empty_cache()
+
+        # 8b. LSBlockDiagLinear (factored+compiled)
+        lsbd_fc = LSBlockDiagLinear.from_uniform_blocks(
+            in_f, out_f, num_blocks, rank=rank, bias=False,
+            factored=True, chain_length=2,
+        ).cuda()
+        lsbd_fc_compiled = torch.compile(lsbd_fc)
+        benchmark_layer(lsbd_fc_compiled, x, f"LSBlockDiagLinear (factored+compile)")
+        del lsbd_fc, lsbd_fc_compiled; gc.collect(); torch.cuda.empty_cache()
+
+        # 9. nn.Linear (compiled, for fair comparison)
         linear = nn.Linear(in_f, out_f, bias=False).cuda()
         linear_compiled = torch.compile(linear)
         benchmark_layer(linear_compiled, x, f"nn.Linear (compiled)")
         del linear, linear_compiled; gc.collect(); torch.cuda.empty_cache()
 
-        # 7. LSLinear (MonarchLinear + low-rank, original)
+        # 10. MonarchLinear (with permutations, BMM path)
+        monarch = MonarchLinear.from_uniform_blocks(in_f, out_f, num_blocks, bias=False, factored=False)
+        benchmark_layer(monarch, x, f"MonarchLinear (BMM, perm)")
+        del monarch; gc.collect(); torch.cuda.empty_cache()
+
+        # 11. LSLinear (MonarchLinear + low-rank, original)
         ls = LSLinear.from_uniform_blocks(in_f, out_f, num_blocks, rank=rank, bias=False)
         benchmark_layer(ls, x, f"LSLinear (monarch+LR)")
         del ls; gc.collect(); torch.cuda.empty_cache()
-
-        # 8. LSBlockDiagLinear (BlockDiag + low-rank, contiguous)
-        lsbd = LSBlockDiagLinear.from_uniform_blocks(in_f, out_f, num_blocks, rank=rank, bias=False, stride_perm=False)
-        benchmark_layer(lsbd, x, f"LSBlockDiagLinear (contig+LR)")
-        del lsbd; gc.collect(); torch.cuda.empty_cache()
-
-        # 9. LSBlockDiagLinear (contig, compiled)
-        lsbd = LSBlockDiagLinear.from_uniform_blocks(in_f, out_f, num_blocks, rank=rank, bias=False, stride_perm=False).cuda()
-        lsbd_compiled = torch.compile(lsbd)
-        benchmark_layer(lsbd_compiled, x, f"LSBlockDiagLinear (contig+compile)")
-        del lsbd, lsbd_compiled; gc.collect(); torch.cuda.empty_cache()
 
 
 def model_benchmark(epochs=5, batch_size=32, config_name="medium"):
@@ -159,8 +176,9 @@ def model_benchmark(epochs=5, batch_size=32, config_name="medium"):
 
     # Import model builders
     from llama_models import (
-        build_standard_llama, build_ls_llama, Llama, LLAMA_CONFIGS, LLAMA_LS_CONFIGS,
-        _make_linear_factory, LSLinear3D,
+        build_standard_llama, build_ls_llama, build_factored_llama,
+        Llama, LLAMA_CONFIGS, LLAMA_LS_CONFIGS,
+        _make_linear_factory, _find_common_num_blocks,
     )
     from data import load_wikitext, create_dataloaders
 
@@ -178,28 +196,6 @@ def model_benchmark(epochs=5, batch_size=32, config_name="medium"):
     device = torch.device("cuda")
     criterion = nn.CrossEntropyLoss()
 
-    def _make_bd_factory(num_blocks, bias=False, stride_perm=False):
-        """Factory for BlockDiagLinear3D layers."""
-        def factory(in_f, out_f):
-            nb = num_blocks
-            while nb > 1 and (in_f % nb != 0 or out_f % nb != 0):
-                nb -= 1
-            bd = BlockDiagLinear(in_f, out_f, nb, bias=bias, stride_perm=stride_perm)
-            return _wrap_3d(bd)
-        return factory
-
-    def _make_lsbd_factory(num_blocks, rank, bias=False, stride_perm=False):
-        """Factory for LSBlockDiagLinear3D layers."""
-        def factory(in_f, out_f):
-            nb = num_blocks
-            while nb > 1 and (in_f % nb != 0 or out_f % nb != 0):
-                nb -= 1
-            lsbd = LSBlockDiagLinear.from_uniform_blocks(
-                in_f, out_f, nb, rank=rank, bias=bias, stride_perm=stride_perm,
-            )
-            return _wrap_3d(lsbd)
-        return factory
-
     class _Wrapper3D(nn.Module):
         """Wraps a 2D layer to handle (B, T, D) inputs."""
         def __init__(self, linear):
@@ -215,8 +211,32 @@ def model_benchmark(epochs=5, batch_size=32, config_name="medium"):
         def number_of_trainable_parameters(self):
             return self.linear.number_of_trainable_parameters()
 
-    def _wrap_3d(layer):
-        return _Wrapper3D(layer)
+    def _make_bd_factory(num_blocks, bias=False, stride_perm=False, factored=False, chain_length=2):
+        """Factory for BlockDiagLinear3D layers."""
+        def factory(in_f, out_f):
+            nb = num_blocks
+            while nb > 1 and (in_f % nb != 0 or out_f % nb != 0):
+                nb -= 1
+            bd = BlockDiagLinear(in_f, out_f, nb, bias=bias, stride_perm=stride_perm,
+                                factored=factored, chain_length=chain_length)
+            return _Wrapper3D(bd)
+        return factory
+
+    def _make_lsbd_factory(num_blocks, rank, bias=False, stride_perm=False, factored=False, chain_length=2):
+        """Factory for LSBlockDiagLinear3D layers."""
+        def factory(in_f, out_f):
+            nb = num_blocks
+            while nb > 1 and (in_f % nb != 0 or out_f % nb != 0):
+                nb -= 1
+            lsbd = LSBlockDiagLinear.from_uniform_blocks(
+                in_f, out_f, nb, rank=rank, bias=bias, stride_perm=stride_perm,
+                factored=factored, chain_length=chain_length,
+            )
+            return _Wrapper3D(lsbd)
+        return factory
+
+    nb = ls_cfg["num_blocks"]
+    rk = ls_cfg["rank"]
 
     models_to_test = [
         ("standard", lambda: build_standard_llama(vocab_size=vocab_size, **cfg), False),
@@ -225,16 +245,28 @@ def model_benchmark(epochs=5, batch_size=32, config_name="medium"):
             vocab_size=vocab_size, **cfg, **ls_cfg), False),
         ("blockdiag (contig)", lambda: Llama(
             vocab_size=vocab_size, **cfg,
-            linear_factory=_make_bd_factory(ls_cfg["num_blocks"], stride_perm=False)), False),
+            linear_factory=_make_bd_factory(nb, stride_perm=False)), False),
         ("blockdiag (compiled)", lambda: Llama(
             vocab_size=vocab_size, **cfg,
-            linear_factory=_make_bd_factory(ls_cfg["num_blocks"], stride_perm=False)), True),
+            linear_factory=_make_bd_factory(nb, stride_perm=False)), True),
+        ("blockdiag (factored)", lambda: Llama(
+            vocab_size=vocab_size, **cfg,
+            linear_factory=_make_bd_factory(nb, factored=True, chain_length=2)), False),
+        ("blockdiag (factored+compiled)", lambda: Llama(
+            vocab_size=vocab_size, **cfg,
+            linear_factory=_make_bd_factory(nb, factored=True, chain_length=2)), True),
         ("ls-blockdiag (contig)", lambda: Llama(
             vocab_size=vocab_size, **cfg,
-            linear_factory=_make_lsbd_factory(ls_cfg["num_blocks"], ls_cfg["rank"], stride_perm=False)), False),
+            linear_factory=_make_lsbd_factory(nb, rk, stride_perm=False)), False),
         ("ls-blockdiag (compiled)", lambda: Llama(
             vocab_size=vocab_size, **cfg,
-            linear_factory=_make_lsbd_factory(ls_cfg["num_blocks"], ls_cfg["rank"], stride_perm=False)), True),
+            linear_factory=_make_lsbd_factory(nb, rk, stride_perm=False)), True),
+        ("ls-blockdiag (factored)", lambda: Llama(
+            vocab_size=vocab_size, **cfg,
+            linear_factory=_make_lsbd_factory(nb, rk, factored=True, chain_length=2)), False),
+        ("ls-blockdiag (factored+compiled)", lambda: Llama(
+            vocab_size=vocab_size, **cfg,
+            linear_factory=_make_lsbd_factory(nb, rk, factored=True, chain_length=2)), True),
     ]
 
     results = {}
@@ -324,14 +356,16 @@ def model_benchmark(epochs=5, batch_size=32, config_name="medium"):
             traceback.print_exc()
 
     # Summary
-    print(f"\n{'=' * 90}")
+    print(f"\n{'=' * 100}")
     print(f" SUMMARY")
-    print(f"{'=' * 90}")
-    print(f"{'Model':30s} {'Stored':>12s} {'Surface':>12s} {'Tok/s':>10s} {'Time':>8s}")
-    print(f"{'-' * 90}")
+    print(f"{'=' * 100}")
+    std_toks = results.get("standard", {}).get("avg_tok_s", 1)
+    print(f"{'Model':30s} {'Stored':>12s} {'Surface':>12s} {'Tok/s':>10s} {'Speedup':>8s} {'Time':>8s}")
+    print(f"{'-' * 100}")
     for name, r in results.items():
+        speedup = r['avg_tok_s'] / std_toks if std_toks > 0 else 0
         print(f"{name:30s} {r['stored']:>12,} {r['surface']:>12,} "
-              f"{r['avg_tok_s']:>10,.0f} {r['total_time']:>7.1f}s")
+              f"{r['avg_tok_s']:>10,.0f} {speedup:>7.2f}x {r['total_time']:>7.1f}s")
 
 
 if __name__ == "__main__":
@@ -339,12 +373,14 @@ if __name__ == "__main__":
     parser.add_argument("--model", action="store_true", help="Run full model benchmark")
     parser.add_argument("--layer", action="store_true", help="Run layer microbenchmark")
     parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--config", default="medium")
     args = parser.parse_args()
 
     if not args.model and not args.layer:
         args.layer = True  # default to layer benchmark
+
+    torch.set_float32_matmul_precision('high')
 
     if args.layer:
         layer_benchmark()
