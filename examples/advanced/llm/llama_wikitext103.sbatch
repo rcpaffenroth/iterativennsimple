@@ -41,14 +41,14 @@ AMP="--amp"
 echo ""
 echo ">>> [$(date)] Starting SMALL config (standard on GPU0, ls on GPU1)"
 
-CUDA_VISIBLE_DEVICES=0 $RUN examples/llm/llama_comparison.py \
+CUDA_VISIBLE_DEVICES=0 $RUN examples/advanced/llm/llama_comparison.py \
     --config small --epochs 30 $AMP $DATASET \
     --models standard \
     --save-json results/llama_small_103_standard.json \
     2>&1 | tee logs/llama_small_103_standard.log &
 PID_SMALL_STD=$!
 
-CUDA_VISIBLE_DEVICES=1 $RUN examples/llm/llama_comparison.py \
+CUDA_VISIBLE_DEVICES=1 $RUN examples/advanced/llm/llama_comparison.py \
     --config small --epochs 30 $AMP $DATASET \
     --models ls \
     --save-json results/llama_small_103_ls.json \
@@ -62,14 +62,14 @@ echo ">>> [$(date)] SMALL config done"
 echo ""
 echo ">>> [$(date)] Starting MEDIUM config (standard on GPU0, ls on GPU1)"
 
-CUDA_VISIBLE_DEVICES=0 $RUN examples/llm/llama_comparison.py \
+CUDA_VISIBLE_DEVICES=0 $RUN examples/advanced/llm/llama_comparison.py \
     --config medium --epochs 20 $AMP $DATASET \
     --models standard \
     --save-json results/llama_medium_103_standard.json \
     2>&1 | tee logs/llama_medium_103_standard.log &
 PID_MED_STD=$!
 
-CUDA_VISIBLE_DEVICES=1 $RUN examples/llm/llama_comparison.py \
+CUDA_VISIBLE_DEVICES=1 $RUN examples/advanced/llm/llama_comparison.py \
     --config medium --epochs 20 $AMP $DATASET \
     --models ls \
     --save-json results/llama_medium_103_ls.json \
@@ -83,7 +83,7 @@ echo ">>> [$(date)] MEDIUM config done"
 echo ""
 echo ">>> [$(date)] Starting LARGE config (standard on GPU0, ls on GPU1)"
 
-CUDA_VISIBLE_DEVICES=0 $RUN examples/llm/llama_comparison.py \
+CUDA_VISIBLE_DEVICES=0 $RUN examples/advanced/llm/llama_comparison.py \
     --config large --epochs 10 $AMP $DATASET \
     --batch-size 16 \
     --models standard \
@@ -91,7 +91,7 @@ CUDA_VISIBLE_DEVICES=0 $RUN examples/llm/llama_comparison.py \
     2>&1 | tee logs/llama_large_103_standard.log &
 PID_LRG_STD=$!
 
-CUDA_VISIBLE_DEVICES=1 $RUN examples/llm/llama_comparison.py \
+CUDA_VISIBLE_DEVICES=1 $RUN examples/advanced/llm/llama_comparison.py \
     --config large --epochs 10 $AMP $DATASET \
     --batch-size 16 \
     --models ls \

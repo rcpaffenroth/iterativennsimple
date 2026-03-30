@@ -42,10 +42,10 @@ _this_dir = os.path.dirname(os.path.abspath(__file__))
 if _this_dir not in sys.path:
     sys.path.insert(0, _this_dir)
 
-# bench_utils lives in the advanced comparisons directory
-_comparisons_dir = os.path.join(_this_dir, "..", "advanced", "comparisons")
+# bench_utils lives in the comparisons directory (sibling to this dir)
+_comparisons_dir = os.path.normpath(os.path.join(_this_dir, "..", "comparisons"))
 if _comparisons_dir not in sys.path:
-    sys.path.append(_comparisons_dir)  # append (not insert) so our models.py wins
+    sys.path.insert(1, _comparisons_dir)  # insert early to beat any pip-installed bench_utils
 
 from data import load_wikitext, create_dataloaders
 from gpt2_models import (

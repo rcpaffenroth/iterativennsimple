@@ -23,7 +23,6 @@ dependencies = [
     "wandb==0.19.*",
     "click==8.1.*",
     "papermill==2.6.0",
-    "generatedata"
 ]
 
 [project.optional-dependencies]
