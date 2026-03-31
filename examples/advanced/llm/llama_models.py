@@ -147,11 +147,14 @@ def _make_ls_factory(
     """
     def factory(in_f: int, out_f: int) -> "LSLinear3D":
         nb = _find_common_num_blocks(in_f, out_f, num_blocks)
+        # Cap rank to half the smaller dimension to avoid degeneracy
+        # (e.g. KV projections where out_features << rank)
+        effective_rank = min(rank, min(in_f, out_f) // 2)
         sparse = MonarchLinear.from_uniform_blocks(
             in_f, out_f, num_blocks=nb, bias=False,
             factored=factored, chain_length=chain_length,
         )
-        ls = LSLinear(sparse, rank=rank, bias=bias)
+        ls = LSLinear(sparse, rank=effective_rank, bias=bias)
         return LSLinear3D(ls)
     return factory
 
@@ -181,8 +184,10 @@ def _make_lsbd_factory(
     """
     def factory(in_f: int, out_f: int) -> "LSBlockDiagLinear3D":
         nb = _find_common_num_blocks(in_f, out_f, num_blocks)
+        # Cap rank to half the smaller dimension to avoid degeneracy
+        effective_rank = min(rank, min(in_f, out_f) // 2)
         lsbd = LSBlockDiagLinear.from_uniform_blocks(
-            in_f, out_f, num_blocks=nb, rank=rank, bias=bias,
+            in_f, out_f, num_blocks=nb, rank=effective_rank, bias=bias,
             factored=factored, chain_length=chain_length,
         )
         return LSBlockDiagLinear3D(lsbd)
