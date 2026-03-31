@@ -34,6 +34,7 @@ from typing import Callable, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from iterativennsimple.LSLinear import LSLinear
 from iterativennsimple.LSBlockDiagLinear import LSBlockDiagLinear
@@ -45,6 +46,7 @@ from iterativennsimple.MonarchLinear import MonarchLinear
 # ---------------------------------------------------------------------------
 
 LLAMA_CONFIGS = {
+    # Dev/test configs
     "small": dict(d_model=256, n_layers=6, n_heads=8, n_kv_heads=4,
                   d_ff=688, context_len=256),
     "medium": dict(d_model=768, n_layers=12, n_heads=12, n_kv_heads=4,
@@ -54,6 +56,19 @@ LLAMA_CONFIGS = {
                    d_ff=2816, context_len=512),
     "large": dict(d_model=2048, n_layers=24, n_heads=16, n_kv_heads=4,
                   d_ff=5504, context_len=1024),
+    # Production-scale configs (Llama 3 architecture)
+    # 7B (~8B): 1× RTX PRO 6000 Blackwell (96GB) or 1× H200
+    "7b": dict(d_model=4096, n_layers=32, n_heads=32, n_kv_heads=8,
+               d_ff=14336, context_len=4096),
+    # 30B: 2× RTX PRO 6000 Blackwell or 1× H200
+    "30b": dict(d_model=6656, n_layers=60, n_heads=52, n_kv_heads=8,
+                d_ff=17920, context_len=4096),
+    # 70B: 4× RTX PRO 6000 Blackwell or 2× H200
+    "70b": dict(d_model=8192, n_layers=80, n_heads=64, n_kv_heads=8,
+                d_ff=28672, context_len=8192),
+    # 405B: 8× H200 or 4× RTX PRO 6000 Blackwell with FSDP
+    "405b": dict(d_model=16384, n_layers=126, n_heads=128, n_kv_heads=8,
+                 d_ff=53248, context_len=8192),
 }
 
 LLAMA_LS_CONFIGS = {
@@ -61,6 +76,10 @@ LLAMA_LS_CONFIGS = {
     "medium": dict(num_blocks=8, rank=32),
     "xlarge": dict(num_blocks=8, rank=64),
     "large": dict(num_blocks=16, rank=64),
+    "7b": dict(num_blocks=32, rank=128),
+    "30b": dict(num_blocks=64, rank=256),
+    "70b": dict(num_blocks=64, rank=512),
+    "405b": dict(num_blocks=128, rank=1024),
 }
 
 LLAMA_FACTORED_CONFIGS = {
@@ -68,6 +87,10 @@ LLAMA_FACTORED_CONFIGS = {
     "medium": dict(num_blocks=16, chain_length=4),
     "xlarge": dict(num_blocks=16, chain_length=4),
     "large": dict(num_blocks=16, chain_length=4),
+    "7b": dict(num_blocks=32, chain_length=2),
+    "30b": dict(num_blocks=64, chain_length=2),
+    "70b": dict(num_blocks=64, chain_length=2),
+    "405b": dict(num_blocks=128, chain_length=2),
 }
 
 LLAMA_LSBD_CONFIGS = {
@@ -75,6 +98,10 @@ LLAMA_LSBD_CONFIGS = {
     "medium": dict(num_blocks=8, rank=32),
     "xlarge": dict(num_blocks=8, rank=64),
     "large": dict(num_blocks=16, rank=64),
+    "7b": dict(num_blocks=32, rank=128),
+    "30b": dict(num_blocks=64, rank=256),
+    "70b": dict(num_blocks=64, rank=512),
+    "405b": dict(num_blocks=128, rank=1024),
 }
 
 LLAMA_LSBD_FACTORED_CONFIGS = {
@@ -82,6 +109,10 @@ LLAMA_LSBD_FACTORED_CONFIGS = {
     "medium": dict(num_blocks=8, rank=32, chain_length=2),
     "xlarge": dict(num_blocks=8, rank=64, chain_length=2),
     "large": dict(num_blocks=16, rank=64, chain_length=2),
+    "7b": dict(num_blocks=32, rank=128, chain_length=2),
+    "30b": dict(num_blocks=64, rank=256, chain_length=2),
+    "70b": dict(num_blocks=64, rank=512, chain_length=2),
+    "405b": dict(num_blocks=128, rank=1024, chain_length=2),
 }
 
 LLAMA_ALL_MODEL_NAMES = [
@@ -485,10 +516,12 @@ class Llama(nn.Module):
         context_len: int = 256,
         dropout: float = 0.0,
         linear_factory: Optional[Callable] = None,
+        gradient_checkpointing: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
         self.context_len = context_len
+        self.gradient_checkpointing = gradient_checkpointing
 
         # Token embedding only — RoPE handles position
         self.tok_emb = nn.Embedding(vocab_size, d_model)
@@ -535,7 +568,10 @@ class Llama(nn.Module):
         x = self.emb_dropout(self.tok_emb(input_ids))
 
         for block in self.blocks:
-            x = block(x)
+            if self.gradient_checkpointing and self.training:
+                x = checkpoint(block, x, use_reentrant=False)
+            else:
+                x = block(x)
 
         x = self.norm(x)
         return self.lm_head(x)
@@ -570,179 +606,84 @@ class Llama(nn.Module):
 # Model builders
 # ---------------------------------------------------------------------------
 
-def build_standard_llama(
-    vocab_size: int,
-    d_model: int = 256,
-    n_layers: int = 6,
-    n_heads: int = 8,
-    n_kv_heads: int = 4,
-    d_ff: int = 688,
-    context_len: int = 256,
-    dropout: float = 0.0,
-    **kwargs,
-) -> Llama:
+def _build_llama(vocab_size, linear_factory, gradient_checkpointing=False, **cfg):
+    """Internal helper: build Llama with given factory and config."""
+    return Llama(
+        vocab_size=vocab_size,
+        d_model=cfg["d_model"],
+        n_layers=cfg["n_layers"],
+        n_heads=cfg["n_heads"],
+        n_kv_heads=cfg["n_kv_heads"],
+        d_ff=cfg["d_ff"],
+        context_len=cfg["context_len"],
+        dropout=cfg.get("dropout", 0.0),
+        linear_factory=linear_factory,
+        gradient_checkpointing=gradient_checkpointing,
+    )
+
+
+def build_standard_llama(vocab_size: int, gradient_checkpointing: bool = False, **cfg) -> Llama:
     """Build a standard Llama with nn.Linear(bias=False) projections."""
-    return Llama(
-        vocab_size=vocab_size,
-        d_model=d_model,
-        n_layers=n_layers,
-        n_heads=n_heads,
-        n_kv_heads=n_kv_heads,
-        d_ff=d_ff,
-        context_len=context_len,
-        dropout=dropout,
-        linear_factory=_make_linear_factory(bias=False),
-    )
+    return _build_llama(vocab_size, _make_linear_factory(bias=False),
+                        gradient_checkpointing, **cfg)
 
 
-def build_ls_llama(
-    vocab_size: int,
-    num_blocks: int = 4,
-    rank: int = 16,
-    d_model: int = 256,
-    n_layers: int = 6,
-    n_heads: int = 8,
-    n_kv_heads: int = 4,
-    d_ff: int = 688,
-    context_len: int = 256,
-    dropout: float = 0.0,
-    **kwargs,
-) -> Llama:
-    """Build a Llama with unfactored LSLinear (Monarch + low-rank).
-
-    Each block stores its own independent weight matrix.
-    Monarch permutations P₁, P₂ provide cross-block mixing.
-    """
-    return Llama(
-        vocab_size=vocab_size,
-        d_model=d_model,
-        n_layers=n_layers,
-        n_heads=n_heads,
-        n_kv_heads=n_kv_heads,
-        d_ff=d_ff,
-        context_len=context_len,
-        dropout=dropout,
-        linear_factory=_make_ls_factory(num_blocks, rank, bias=False, factored=False),
-    )
+def build_ls_llama(vocab_size: int, num_blocks: int = 4, rank: int = 16,
+                   gradient_checkpointing: bool = False, **cfg) -> Llama:
+    """Build a Llama with unfactored LSLinear (Monarch + low-rank, with perms)."""
+    return _build_llama(vocab_size,
+                        _make_ls_factory(num_blocks, rank, bias=False, factored=False),
+                        gradient_checkpointing, **cfg)
 
 
-def build_ls_factored_llama(
-    vocab_size: int,
-    num_blocks: int = 4,
-    rank: int = 16,
-    chain_length: int = 2,
-    d_model: int = 256,
-    n_layers: int = 6,
-    n_heads: int = 8,
-    n_kv_heads: int = 4,
-    d_ff: int = 688,
-    context_len: int = 256,
-    dropout: float = 0.0,
-    **kwargs,
-) -> Llama:
-    """Build a Llama with factored LSLinear (factored Monarch + low-rank).
-
-    Chain-factored blocks: k^m blocks from k factor matrices.
-    Monarch permutations P₁, P₂ provide cross-block mixing.
-    Higher chain_length = more parameter savings.
-    """
-    return Llama(
-        vocab_size=vocab_size,
-        d_model=d_model,
-        n_layers=n_layers,
-        n_heads=n_heads,
-        n_kv_heads=n_kv_heads,
-        d_ff=d_ff,
-        context_len=context_len,
-        dropout=dropout,
-        linear_factory=_make_ls_factory(
-            num_blocks, rank, bias=False,
-            factored=True, chain_length=chain_length,
-        ),
-    )
+def build_ls_factored_llama(vocab_size: int, num_blocks: int = 4, rank: int = 16,
+                            chain_length: int = 2,
+                            gradient_checkpointing: bool = False, **cfg) -> Llama:
+    """Build a Llama with factored LSLinear (factored Monarch + low-rank, with perms)."""
+    return _build_llama(vocab_size,
+                        _make_ls_factory(num_blocks, rank, bias=False,
+                                         factored=True, chain_length=chain_length),
+                        gradient_checkpointing, **cfg)
 
 
-def build_ls_blockdiag_llama(
-    vocab_size: int,
-    num_blocks: int = 4,
-    rank: int = 16,
-    d_model: int = 256,
-    n_layers: int = 6,
-    n_heads: int = 8,
-    n_kv_heads: int = 4,
-    d_ff: int = 688,
-    context_len: int = 256,
-    dropout: float = 0.0,
-    **kwargs,
-) -> Llama:
-    """Build a Llama with LSBlockDiagLinear (block-diag + low-rank, no permutations).
-
-    The block-diagonal handles local structure via fast BMM; the low-rank
-    AB handles global cross-block mixing — replacing Monarch permutations
-    with a learnable and adaptive component.
-    """
-    return Llama(
-        vocab_size=vocab_size,
-        d_model=d_model,
-        n_layers=n_layers,
-        n_heads=n_heads,
-        n_kv_heads=n_kv_heads,
-        d_ff=d_ff,
-        context_len=context_len,
-        dropout=dropout,
-        linear_factory=_make_lsbd_factory(num_blocks, rank, bias=False),
-    )
+def build_ls_blockdiag_llama(vocab_size: int, num_blocks: int = 4, rank: int = 16,
+                             gradient_checkpointing: bool = False, **cfg) -> Llama:
+    """Build a Llama with LSBlockDiagLinear (block-diag + low-rank, no perms)."""
+    return _build_llama(vocab_size,
+                        _make_lsbd_factory(num_blocks, rank, bias=False),
+                        gradient_checkpointing, **cfg)
 
 
-def build_ls_blockdiag_factored_llama(
-    vocab_size: int,
-    num_blocks: int = 4,
-    rank: int = 16,
-    chain_length: int = 2,
-    d_model: int = 256,
-    n_layers: int = 6,
-    n_heads: int = 8,
-    n_kv_heads: int = 4,
-    d_ff: int = 688,
-    context_len: int = 256,
-    dropout: float = 0.0,
-    **kwargs,
-) -> Llama:
-    """Build a Llama with factored LSBlockDiagLinear.
-
-    Uses chain-factored block weights: k^m blocks from k factor matrices.
-    Higher chain_length = more parameter savings but more materialization cost.
-    """
-    return Llama(
-        vocab_size=vocab_size,
-        d_model=d_model,
-        n_layers=n_layers,
-        n_heads=n_heads,
-        n_kv_heads=n_kv_heads,
-        d_ff=d_ff,
-        context_len=context_len,
-        dropout=dropout,
-        linear_factory=_make_lsbd_factory(
-            num_blocks, rank, bias=False,
-            factored=True, chain_length=chain_length,
-        ),
-    )
+def build_ls_blockdiag_factored_llama(vocab_size: int, num_blocks: int = 4, rank: int = 16,
+                                      chain_length: int = 2,
+                                      gradient_checkpointing: bool = False, **cfg) -> Llama:
+    """Build a Llama with factored LSBlockDiagLinear (factored block-diag + low-rank, no perms)."""
+    return _build_llama(vocab_size,
+                        _make_lsbd_factory(num_blocks, rank, bias=False,
+                                           factored=True, chain_length=chain_length),
+                        gradient_checkpointing, **cfg)
 
 
-def build_llama_model(name: str, vocab_size: int, config_name: str = "small", **overrides):
+def build_llama_model(name: str, vocab_size: int, config_name: str = "small",
+                      gradient_checkpointing: bool = False, **overrides):
     """Build a Llama model by name using a preset config.
 
     Args:
         name: One of LLAMA_ALL_MODEL_NAMES.
         vocab_size: Vocabulary size.
-        config_name: Preset config name ("small", "medium", "xlarge", "large").
+        config_name: Preset config name (small/medium/xlarge/large/7b/30b/70b/405b).
+        gradient_checkpointing: Enable gradient checkpointing to save memory
+            at the cost of ~30% slower training. Essential for 7B+ models.
         **overrides: Override any config parameter.
 
     Returns:
         nn.Module with a forward(input_ids) -> logits interface.
     """
     cfg = dict(LLAMA_CONFIGS[config_name])
-    cfg.update(overrides)
+    cfg.update({k: v for k, v in overrides.items()
+                if k in ("d_model", "n_layers", "n_heads", "n_kv_heads",
+                         "d_ff", "context_len", "dropout")})
+    cfg["gradient_checkpointing"] = gradient_checkpointing
 
     if name == "standard":
         return build_standard_llama(vocab_size=vocab_size, **cfg)
@@ -750,32 +691,27 @@ def build_llama_model(name: str, vocab_size: int, config_name: str = "small", **
     elif name == "ls":
         ls_cfg = dict(LLAMA_LS_CONFIGS.get(config_name, LLAMA_LS_CONFIGS["small"]))
         ls_cfg.update({k: v for k, v in overrides.items() if k in ("num_blocks", "rank")})
-        cfg.update(ls_cfg)
-        return build_ls_llama(vocab_size=vocab_size, **cfg)
+        return build_ls_llama(vocab_size=vocab_size, **ls_cfg, **cfg)
 
     elif name == "ls-factored":
         lsf_cfg = dict(LLAMA_LS_CONFIGS.get(config_name, LLAMA_LS_CONFIGS["small"]))
         lsf_cfg.update({k: v for k, v in overrides.items()
                         if k in ("num_blocks", "rank", "chain_length")})
-        # Default chain_length from LLAMA_FACTORED_CONFIGS if not overridden
         if "chain_length" not in lsf_cfg:
             f_defaults = LLAMA_FACTORED_CONFIGS.get(config_name, LLAMA_FACTORED_CONFIGS["small"])
             lsf_cfg["chain_length"] = f_defaults.get("chain_length", 2)
-        cfg.update(lsf_cfg)
-        return build_ls_factored_llama(vocab_size=vocab_size, **cfg)
+        return build_ls_factored_llama(vocab_size=vocab_size, **lsf_cfg, **cfg)
 
     elif name == "ls-blockdiag":
         bd_cfg = dict(LLAMA_LSBD_CONFIGS.get(config_name, LLAMA_LSBD_CONFIGS["small"]))
         bd_cfg.update({k: v for k, v in overrides.items() if k in ("num_blocks", "rank")})
-        cfg.update(bd_cfg)
-        return build_ls_blockdiag_llama(vocab_size=vocab_size, **cfg)
+        return build_ls_blockdiag_llama(vocab_size=vocab_size, **bd_cfg, **cfg)
 
     elif name == "ls-blockdiag-factored":
         bdf_cfg = dict(LLAMA_LSBD_FACTORED_CONFIGS.get(config_name, LLAMA_LSBD_FACTORED_CONFIGS["small"]))
         bdf_cfg.update({k: v for k, v in overrides.items()
                         if k in ("num_blocks", "rank", "chain_length")})
-        cfg.update(bdf_cfg)
-        return build_ls_blockdiag_factored_llama(vocab_size=vocab_size, **cfg)
+        return build_ls_blockdiag_factored_llama(vocab_size=vocab_size, **bdf_cfg, **cfg)
 
     else:
         raise ValueError(f"Unknown model: {name!r}. Choose from: {LLAMA_ALL_MODEL_NAMES}")
