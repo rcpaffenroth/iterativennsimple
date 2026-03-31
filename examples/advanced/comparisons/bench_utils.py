@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 
 from iterativennsimple.LSLinear import LSLinear
+from iterativennsimple.LSBlockDiagLinear import LSBlockDiagLinear
 from iterativennsimple.MaskedLinear import MaskedLinear
 from iterativennsimple.MonarchLinear import MonarchLinear
 
@@ -169,7 +170,7 @@ def count_stored(model):
 
 def _leaf_surface(module):
     """Surface params for a single leaf module (non-recursive)."""
-    if isinstance(module, LSLinear):
+    if isinstance(module, (LSLinear, LSBlockDiagLinear)):
         # Low-rank L=AB is dense → covers full in×out surface
         # S adds sparse corrections on the same surface
         s = module.in_features * module.out_features

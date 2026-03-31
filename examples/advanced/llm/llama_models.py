@@ -1,9 +1,12 @@
-"""Llama 3 language model definitions for LSLinear vs Standard comparison.
+"""Llama 3 language model definitions for structured-sparse comparison.
 
-Two model variants:
+Model variants:
 
 1. **Standard Llama** — decoder-only transformer with ``nn.Linear``.
-2. **LSLinear Llama** — identical skeleton, LSLinear replaces all linear projections.
+2. **LS Llama** — LSLinear (unfactored Monarch + low-rank) with permutations.
+3. **LS-Factored Llama** — LSLinear (factored Monarch + low-rank) with permutations.
+4. **LS-BlockDiag Llama** — LSBlockDiagLinear (unfactored block-diag + low-rank, no perms).
+5. **LS-BlockDiag-Factored Llama** — LSBlockDiagLinear (factored block-diag + low-rank, no perms).
 
 All variants share the same code via a ``linear_factory`` injection pattern,
 ensuring the comparison is fair by construction.
@@ -22,6 +25,7 @@ Usage::
     cfg = LLAMA_CONFIGS["small"]
     model_a = build_standard_llama(vocab_size=50257, **cfg)
     model_b = build_ls_llama(vocab_size=50257, num_blocks=4, rank=16, **cfg)
+    model_c = build_ls_blockdiag_llama(vocab_size=50257, num_blocks=4, rank=16, **cfg)
 """
 
 import math
@@ -32,6 +36,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from iterativennsimple.LSLinear import LSLinear
+from iterativennsimple.LSBlockDiagLinear import LSBlockDiagLinear
 from iterativennsimple.MonarchLinear import MonarchLinear
 
 
@@ -65,7 +70,24 @@ LLAMA_FACTORED_CONFIGS = {
     "large": dict(num_blocks=16, chain_length=4),
 }
 
-LLAMA_ALL_MODEL_NAMES = ["standard", "ls", "factored"]
+LLAMA_LSBD_CONFIGS = {
+    "small": dict(num_blocks=4, rank=16),
+    "medium": dict(num_blocks=8, rank=32),
+    "xlarge": dict(num_blocks=8, rank=64),
+    "large": dict(num_blocks=16, rank=64),
+}
+
+LLAMA_LSBD_FACTORED_CONFIGS = {
+    "small": dict(num_blocks=4, rank=16, chain_length=2),
+    "medium": dict(num_blocks=8, rank=32, chain_length=2),
+    "xlarge": dict(num_blocks=8, rank=64, chain_length=2),
+    "large": dict(num_blocks=16, rank=64, chain_length=2),
+}
+
+LLAMA_ALL_MODEL_NAMES = [
+    "standard", "ls", "ls-factored",
+    "ls-blockdiag", "ls-blockdiag-factored",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -80,13 +102,25 @@ def _find_common_num_blocks(in_f: int, out_f: int, desired: int) -> int:
     return nb
 
 
-def _make_ls_factory(num_blocks: int, rank: int, bias: bool = False):
-    """Return a linear_factory callable that produces LSLinear3D layers."""
+def _make_ls_factory(
+    num_blocks: int,
+    rank: int,
+    bias: bool = False,
+    factored: bool = False,
+    chain_length: int = 2,
+):
+    """Return a linear_factory callable that produces LSLinear3D layers.
+
+    Builds the MonarchLinear sparse component directly so we can control
+    whether it uses factored or unfactored block weights.
+    """
     def factory(in_f: int, out_f: int) -> "LSLinear3D":
         nb = _find_common_num_blocks(in_f, out_f, num_blocks)
-        ls = LSLinear.from_uniform_blocks(
-            in_f, out_f, num_blocks=nb, rank=rank, bias=bias,
+        sparse = MonarchLinear.from_uniform_blocks(
+            in_f, out_f, num_blocks=nb, bias=False,
+            factored=factored, chain_length=chain_length,
         )
+        ls = LSLinear(sparse, rank=rank, bias=bias)
         return LSLinear3D(ls)
     return factory
 
@@ -98,20 +132,29 @@ def _make_linear_factory(bias: bool = False):
     return factory
 
 
-def _make_factored_factory(num_blocks: int, chain_length: int = 2, bias: bool = False):
-    """Return a linear_factory callable that produces factored MonarchLinear3D layers.
+def _make_lsbd_factory(
+    num_blocks: int,
+    rank: int,
+    bias: bool = False,
+    factored: bool = False,
+    chain_length: int = 2,
+):
+    """Return a linear_factory callable that produces LSBlockDiagLinear3D layers.
 
-    Uses chain-factored blocks: k^m blocks from k factor matrices, where
-    k = ceil(num_blocks^(1/m)) and m = chain_length.  Non-square projections
-    use a shared adapter matrix for the dimension mismatch.
+    LSBlockDiagLinear = BlockDiagLinear (pure BMM, no permutations) + low-rank AB.
+    The low-rank component provides learnable global cross-block mixing,
+    replacing what Monarch permutations P₁, P₂ would have provided.
+
+    When factored=True, the block-diagonal weights are chain-factored:
+    k^m blocks from k factor matrices (exponential parameter savings).
     """
-    def factory(in_f: int, out_f: int) -> nn.Module:
+    def factory(in_f: int, out_f: int) -> "LSBlockDiagLinear3D":
         nb = _find_common_num_blocks(in_f, out_f, num_blocks)
-        m = MonarchLinear.from_uniform_blocks(
-            in_f, out_f, num_blocks=nb, bias=bias,
-            factored=True, chain_length=chain_length,
+        lsbd = LSBlockDiagLinear.from_uniform_blocks(
+            in_f, out_f, num_blocks=nb, rank=rank, bias=bias,
+            factored=factored, chain_length=chain_length,
         )
-        return MonarchLinear3D(m)
+        return LSBlockDiagLinear3D(lsbd)
     return factory
 
 
@@ -154,6 +197,29 @@ class MonarchLinear3D(nn.Module):
         self.linear = monarch_linear
         self.in_features = monarch_linear.in_features
         self.out_features = monarch_linear.out_features
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        shape = x.shape
+        x_2d = x.reshape(-1, shape[-1])
+        y_2d = self.linear(x_2d)
+        return y_2d.reshape(*shape[:-1], -1)
+
+    def number_of_trainable_parameters(self) -> int:
+        return self.linear.number_of_trainable_parameters()
+
+
+class LSBlockDiagLinear3D(nn.Module):
+    """Wraps LSBlockDiagLinear to handle arbitrary leading dimensions (e.g. (B, T, D)).
+
+    LSBlockDiagLinear only accepts 2D (batch, features) input.
+    This adapter flattens leading dims, calls LSBlockDiagLinear, then restores shape.
+    """
+
+    def __init__(self, lsbd_linear: LSBlockDiagLinear):
+        super().__init__()
+        self.linear = lsbd_linear
+        self.in_features = lsbd_linear.in_features
+        self.out_features = lsbd_linear.out_features
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         shape = x.shape
@@ -481,7 +547,7 @@ class Llama(nn.Module):
         for name, module in self.named_modules():
             if id(module) in counted:
                 continue
-            if isinstance(module, (LSLinear3D, MonarchLinear3D)):
+            if isinstance(module, (LSLinear3D, MonarchLinear3D, LSBlockDiagLinear3D)):
                 total += module.number_of_trainable_parameters()
                 counted.add(id(module))
                 for child in module.modules():
@@ -542,37 +608,10 @@ def build_ls_llama(
     dropout: float = 0.0,
     **kwargs,
 ) -> Llama:
-    """Build a Llama with LSLinear replacing all linear projections."""
-    return Llama(
-        vocab_size=vocab_size,
-        d_model=d_model,
-        n_layers=n_layers,
-        n_heads=n_heads,
-        n_kv_heads=n_kv_heads,
-        d_ff=d_ff,
-        context_len=context_len,
-        dropout=dropout,
-        linear_factory=_make_ls_factory(num_blocks, rank, bias=False),
-    )
+    """Build a Llama with unfactored LSLinear (Monarch + low-rank).
 
-
-def build_factored_llama(
-    vocab_size: int,
-    num_blocks: int = 16,
-    chain_length: int = 4,
-    d_model: int = 256,
-    n_layers: int = 6,
-    n_heads: int = 8,
-    n_kv_heads: int = 4,
-    d_ff: int = 688,
-    context_len: int = 256,
-    dropout: float = 0.0,
-    **kwargs,
-) -> Llama:
-    """Build a Llama with chain-factored MonarchLinear replacing all projections.
-
-    Uses k^m blocks from k factor matrices (exponential parameter savings).
-    Non-square projections use a shared adapter matrix.
+    Each block stores its own independent weight matrix.
+    Monarch permutations P₁, P₂ provide cross-block mixing.
     """
     return Llama(
         vocab_size=vocab_size,
@@ -583,7 +622,110 @@ def build_factored_llama(
         d_ff=d_ff,
         context_len=context_len,
         dropout=dropout,
-        linear_factory=_make_factored_factory(num_blocks, chain_length, bias=False),
+        linear_factory=_make_ls_factory(num_blocks, rank, bias=False, factored=False),
+    )
+
+
+def build_ls_factored_llama(
+    vocab_size: int,
+    num_blocks: int = 4,
+    rank: int = 16,
+    chain_length: int = 2,
+    d_model: int = 256,
+    n_layers: int = 6,
+    n_heads: int = 8,
+    n_kv_heads: int = 4,
+    d_ff: int = 688,
+    context_len: int = 256,
+    dropout: float = 0.0,
+    **kwargs,
+) -> Llama:
+    """Build a Llama with factored LSLinear (factored Monarch + low-rank).
+
+    Chain-factored blocks: k^m blocks from k factor matrices.
+    Monarch permutations P₁, P₂ provide cross-block mixing.
+    Higher chain_length = more parameter savings.
+    """
+    return Llama(
+        vocab_size=vocab_size,
+        d_model=d_model,
+        n_layers=n_layers,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        d_ff=d_ff,
+        context_len=context_len,
+        dropout=dropout,
+        linear_factory=_make_ls_factory(
+            num_blocks, rank, bias=False,
+            factored=True, chain_length=chain_length,
+        ),
+    )
+
+
+def build_ls_blockdiag_llama(
+    vocab_size: int,
+    num_blocks: int = 4,
+    rank: int = 16,
+    d_model: int = 256,
+    n_layers: int = 6,
+    n_heads: int = 8,
+    n_kv_heads: int = 4,
+    d_ff: int = 688,
+    context_len: int = 256,
+    dropout: float = 0.0,
+    **kwargs,
+) -> Llama:
+    """Build a Llama with LSBlockDiagLinear (block-diag + low-rank, no permutations).
+
+    The block-diagonal handles local structure via fast BMM; the low-rank
+    AB handles global cross-block mixing — replacing Monarch permutations
+    with a learnable and adaptive component.
+    """
+    return Llama(
+        vocab_size=vocab_size,
+        d_model=d_model,
+        n_layers=n_layers,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        d_ff=d_ff,
+        context_len=context_len,
+        dropout=dropout,
+        linear_factory=_make_lsbd_factory(num_blocks, rank, bias=False),
+    )
+
+
+def build_ls_blockdiag_factored_llama(
+    vocab_size: int,
+    num_blocks: int = 4,
+    rank: int = 16,
+    chain_length: int = 2,
+    d_model: int = 256,
+    n_layers: int = 6,
+    n_heads: int = 8,
+    n_kv_heads: int = 4,
+    d_ff: int = 688,
+    context_len: int = 256,
+    dropout: float = 0.0,
+    **kwargs,
+) -> Llama:
+    """Build a Llama with factored LSBlockDiagLinear.
+
+    Uses chain-factored block weights: k^m blocks from k factor matrices.
+    Higher chain_length = more parameter savings but more materialization cost.
+    """
+    return Llama(
+        vocab_size=vocab_size,
+        d_model=d_model,
+        n_layers=n_layers,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        d_ff=d_ff,
+        context_len=context_len,
+        dropout=dropout,
+        linear_factory=_make_lsbd_factory(
+            num_blocks, rank, bias=False,
+            factored=True, chain_length=chain_length,
+        ),
     )
 
 
@@ -591,9 +733,9 @@ def build_llama_model(name: str, vocab_size: int, config_name: str = "small", **
     """Build a Llama model by name using a preset config.
 
     Args:
-        name: One of "standard", "ls", "factored".
+        name: One of LLAMA_ALL_MODEL_NAMES.
         vocab_size: Vocabulary size.
-        config_name: Preset config name ("small", "medium", "large").
+        config_name: Preset config name ("small", "medium", "xlarge", "large").
         **overrides: Override any config parameter.
 
     Returns:
@@ -611,11 +753,29 @@ def build_llama_model(name: str, vocab_size: int, config_name: str = "small", **
         cfg.update(ls_cfg)
         return build_ls_llama(vocab_size=vocab_size, **cfg)
 
-    elif name == "factored":
-        f_cfg = dict(LLAMA_FACTORED_CONFIGS.get(config_name, LLAMA_FACTORED_CONFIGS["small"]))
-        f_cfg.update({k: v for k, v in overrides.items() if k in ("num_blocks", "chain_length")})
-        cfg.update(f_cfg)
-        return build_factored_llama(vocab_size=vocab_size, **cfg)
+    elif name == "ls-factored":
+        lsf_cfg = dict(LLAMA_LS_CONFIGS.get(config_name, LLAMA_LS_CONFIGS["small"]))
+        lsf_cfg.update({k: v for k, v in overrides.items()
+                        if k in ("num_blocks", "rank", "chain_length")})
+        # Default chain_length from LLAMA_FACTORED_CONFIGS if not overridden
+        if "chain_length" not in lsf_cfg:
+            f_defaults = LLAMA_FACTORED_CONFIGS.get(config_name, LLAMA_FACTORED_CONFIGS["small"])
+            lsf_cfg["chain_length"] = f_defaults.get("chain_length", 2)
+        cfg.update(lsf_cfg)
+        return build_ls_factored_llama(vocab_size=vocab_size, **cfg)
+
+    elif name == "ls-blockdiag":
+        bd_cfg = dict(LLAMA_LSBD_CONFIGS.get(config_name, LLAMA_LSBD_CONFIGS["small"]))
+        bd_cfg.update({k: v for k, v in overrides.items() if k in ("num_blocks", "rank")})
+        cfg.update(bd_cfg)
+        return build_ls_blockdiag_llama(vocab_size=vocab_size, **cfg)
+
+    elif name == "ls-blockdiag-factored":
+        bdf_cfg = dict(LLAMA_LSBD_FACTORED_CONFIGS.get(config_name, LLAMA_LSBD_FACTORED_CONFIGS["small"]))
+        bdf_cfg.update({k: v for k, v in overrides.items()
+                        if k in ("num_blocks", "rank", "chain_length")})
+        cfg.update(bdf_cfg)
+        return build_ls_blockdiag_factored_llama(vocab_size=vocab_size, **cfg)
 
     else:
         raise ValueError(f"Unknown model: {name!r}. Choose from: {LLAMA_ALL_MODEL_NAMES}")

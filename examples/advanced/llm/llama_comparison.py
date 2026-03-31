@@ -1,15 +1,18 @@
 #!/usr/bin/env python
-"""Llama 3 training comparison: LSLinear Llama vs Standard Llama.
+"""Llama 3 training comparison: structured-sparse variants.
 
-Demonstrates LSLinear's parameter efficiency on language modeling by training
-two Llama 3 architecture variants on WikiText and comparing perplexity,
-throughput, and memory usage.
+Demonstrates parameter efficiency and throughput of structured-sparse linear
+layers on language modeling by training multiple Llama 3 architecture variants
+on WikiText and comparing perplexity, throughput, and memory usage.
 
 Llama 3 features:  RMSNorm · RoPE · GQA · SwiGLU · no bias
 
 Variants:
-  1. Standard Llama  — decoder-only transformer with nn.Linear (no bias)
-  2. LSLinear Llama   — identical Llama, LSLinear replaces all linear projections
+  1. Standard Llama        — decoder-only transformer with nn.Linear (no bias)
+  2. LS Llama              — LSLinear (unfactored Monarch + low-rank, with perms)
+  3. LS-Factored Llama     — LSLinear (factored Monarch + low-rank, with perms)
+  4. LS-BlockDiag Llama    — LSBlockDiagLinear (unfactored block-diag + low-rank, no perms)
+  5. LS-BlockDiag-Factored — LSBlockDiagLinear (factored block-diag + low-rank, no perms)
 
 Usage
 -----
@@ -52,7 +55,8 @@ if _comparisons_dir not in sys.path:
 from data import load_wikitext, create_dataloaders
 from llama_models import (
     build_llama_model, LLAMA_ALL_MODEL_NAMES, LLAMA_CONFIGS, LLAMA_LS_CONFIGS,
-    LLAMA_FACTORED_CONFIGS, LSLinear3D, MonarchLinear3D,
+    LLAMA_FACTORED_CONFIGS, LLAMA_LSBD_CONFIGS, LLAMA_LSBD_FACTORED_CONFIGS,
+    LSLinear3D, MonarchLinear3D, LSBlockDiagLinear3D,
 )
 
 # Reuse bench_utils from advanced comparisons
@@ -225,8 +229,10 @@ def train_model(model, train_loader, val_loader, device, epochs, lr=3e-4,
 @click.option("--n-kv-heads", type=int, default=None, help="Override n_kv_heads from config.")
 @click.option("--d-ff", type=int, default=None, help="Override d_ff from config.")
 @click.option("--context-len", type=int, default=None, help="Override context_len from config.")
-@click.option("--num-blocks", type=int, default=None, help="Override LSLinear num_blocks.")
-@click.option("--rank", type=int, default=None, help="Override LSLinear rank.")
+@click.option("--num-blocks", type=int, default=None, help="Override num_blocks for sparse layers.")
+@click.option("--rank", type=int, default=None, help="Override low-rank component rank.")
+@click.option("--chain-length", type=int, default=None,
+              help="Override chain_length for factored variants (higher = more param savings).")
 @click.option("--batch-size", type=int, default=32, show_default=True)
 @click.option("--epochs", type=int, default=10, show_default=True)
 @click.option("--lr", type=float, default=3e-4, show_default=True)
@@ -244,9 +250,9 @@ def train_model(model, train_loader, val_loader, device, epochs, lr=3e-4,
               help="Path to unified JSONL log (appends).")
 @click.option("--quiet", is_flag=True)
 def main(config_name, models, dataset, d_model, n_layers, n_heads, n_kv_heads,
-         d_ff, context_len, num_blocks, rank, batch_size, epochs, lr,
+         d_ff, context_len, num_blocks, rank, chain_length, batch_size, epochs, lr,
          weight_decay, dropout, grad_clip, amp, device, seed, save_json, log, quiet):
-    """Train and compare Standard Llama vs LSLinear Llama on WikiText."""
+    """Train and compare structured-sparse Llama variants on WikiText."""
 
     torch.manual_seed(seed)
     if device == "auto":
@@ -273,6 +279,8 @@ def main(config_name, models, dataset, d_model, n_layers, n_heads, n_kv_heads,
         overrides["num_blocks"] = num_blocks
     if rank is not None:
         overrides["rank"] = rank
+    if chain_length is not None:
+        overrides["chain_length"] = chain_length
     if dropout > 0:
         overrides["dropout"] = dropout
 

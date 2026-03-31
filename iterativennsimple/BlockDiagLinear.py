@@ -5,8 +5,7 @@ permutation matrices P₁ and P₂ entirely. Instead of S = P₁ M P₂,
 the weight matrix is just M (block-diagonal).
 
 The forward pass is a single ``torch.bmm`` call via reshape, which
-goes through cuBLAS and is extremely fast — comparable to a dense
-``nn.Linear`` for medium-sized layers.
+goes through cuBLAS and is extremely fast. 
 
 The trade-off: without permutations, each block only connects a
 contiguous slice of inputs to a contiguous slice of outputs.  When
