@@ -103,7 +103,7 @@ uv sync
 
 For development with additional testing tools:
 ```bash
-uv sync --extra dev
+uv sync --group dev
 ```
 
 ### 3. Activate Python Environment

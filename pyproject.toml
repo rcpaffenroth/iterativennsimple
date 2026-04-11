@@ -26,7 +26,7 @@ dependencies = [
     "generatedata" 
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest==8.3.*",
     "pylint==3.2.*",
