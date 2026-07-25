@@ -723,7 +723,7 @@ wheels = [
 [[package]]
 name = "generatedata"
 version = "0.4.1"
-source = { git = "https://github.com/rcpaffenroth/generatedata.git?rev=feature%2Fclaude-update-versions#9286bc891c4a289d5a855cb4c87691a4fafe7578" }
+source = { git = "https://github.com/rcpaffenroth/generatedata.git?rev=release%2Fv0.4.1#9286bc891c4a289d5a855cb4c87691a4fafe7578" }
 dependencies = [
     { name = "anywidget" },
     { name = "ipykernel" },
@@ -950,7 +950,7 @@ wheels = [
 
 [[package]]
 name = "iterativennsimple"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -986,7 +986,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1,<9" },
-    { name = "generatedata", git = "https://github.com/rcpaffenroth/generatedata.git?rev=feature%2Fclaude-update-versions" },
+    { name = "generatedata", git = "https://github.com/rcpaffenroth/generatedata.git?rev=release%2Fv0.4.1" },
     { name = "ipykernel", specifier = ">=6.29,<7" },
     { name = "ipympl", specifier = ">=0.9,<1" },
     { name = "jupyterlab", specifier = ">=4.3,<5" },
