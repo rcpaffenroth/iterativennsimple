@@ -40,6 +40,7 @@ The key insight: by sharing weights W and bias b across all layers, we create a 
 
 - **`Sequential2D.py`**: Main iterative network implementation supporting 2D problems
 - **`Sequential1D.py`**: Simplified 1D version for basic experimentation  
+- **`Sequential2DRNN.py`**: Runs a `Sequential2D` as a dynamical system, with an internal iteration count decoupled from the sequence length. Reproduces `torch.nn.RNN` exactly at one setting — see [`README_Sequential2DRNN.md`](README_Sequential2DRNN.md)
 - **`MaskedLinear.py`**: Linear layers with learnable masking for sparse connectivity
 - **`SparseLinear.py`**: DEPRECATED: Original sparse implementation using torch-sparse and torch-scatter (replaced by Monarch matrix)
 - **`bmatrix.py`**: Utilities for block matrix operations
@@ -53,6 +54,8 @@ The key insight: by sharing weights W and bias b across all layers, we create a 
 4. **`4-rcp-pulled-apart.ipynb`**: Detailed analysis of network components
 5. **`5-rcp-MLP.ipynb`**: Comparison between standard MLPs and iterative networks
 6. **`6-rcp-Sequential-vs-Sequential2D.ipynb`**: Performance comparison between Sequential1D and Sequential2D implementations
+7. **`7-rcp-RNN-as-Sequential2D.ipynb`**: Rebuilding a `torch.nn.RNN` as an iterated block map, then decoupling the internal iteration count from the sequence length
+8. **`8-rcp-fixed-points-and-bistability.ipynb`**: The same map with a one-dimensional hidden state, where cobwebs, bistability and a saddle-node fold can all be drawn — memory as the identity of an attractor, and the input as a bifurcation parameter
 
 #### Presentations (`notebooks/presentations/`)
 - **`dynamical_systems.ipynb`**: Interactive exploration of dynamical systems theory, including:

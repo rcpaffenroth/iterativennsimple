@@ -1,8 +1,23 @@
 # Overview: An RNN-compatible module built on `Sequential2D`
 
-**Status:** design agreed, not yet implemented.
+**Status:** implemented in `iterativennsimple/Sequential2DRNN.py`.
 **Audience:** whoever (human or LLM) picks this up next. This document exists so the
 ideas below do not have to be relitigated.
+
+**Where things live:**
+
+| | |
+| --- | --- |
+| `iterativennsimple/Sequential2DRNN.py` | the module |
+| `README_Sequential2DRNN.md` | user-facing entry point, quickstart, the gotchas |
+| `notebooks/7-rcp-RNN-as-Sequential2D.ipynb` | tutorial; symlinked into `tests/`, run by nbmake |
+| `examples/rnn_internal_iterations.py` | extended experiment on $K > 1$ |
+| `tests/test_Sequential2DRNN.py` | the invariants, mostly the silent ones |
+
+This document remains the record of *why*; the README is the record of *how*. Note
+one divergence from §5.2 below: `from_rnn` builds the **two**-slot map $[x, h]$ of
+eq. (9), since `torch.nn.RNN` has no readout and the $y$-slot would be vestigial.
+The three-slot layout is what `from_3x3` gives you.
 
 ---
 
@@ -639,7 +654,135 @@ Deferred, not rejected. Revisit when $K > 1$ experiments are actually running.
 - **`PackedSequence`** — real `nn.RNN` accepts it. Meaningfully more code. Needed?
 - **`batch_first`, `dropout`** — mechanical, but confirm they are in scope.
 - **Should $K$ be allowed to vary** (per layer, per timestep, adaptive)? Start constant.
-- **Module name and file location.**
+  See §10.3 — adaptive $K$ falls out of convergence for free.
+- **Does $K > 1$ ever win?** The one experiment run so far
+  (`examples/rnn_internal_iterations.py`) says no on a pure *memory* task, and
+  explains why: every internal iteration applies a contraction, so the memory
+  horizon shrinks geometrically in $K$. Orthogonal initialisation of $W_{hh}$
+  largely repairs it — $K = 4$ goes from chance to 0.89 accuracy — but $K = 1$
+  still wins. **The comparison across $K$ is meaningless unless initialisation is
+  controlled for**, which was not anticipated anywhere above. Untested: a
+  compute-bound rather than memory-bound task, which is where $K > 1$ has
+  somewhere to put the effort.
+
+### 10.3 Convergence of the internal iteration — a feature, and the trap inside it
+
+Not an open question so much as a research direction with one sharp hazard in it.
+
+**Convergence of $T = A \circ b \circ M$ in $k$ is desirable, not a failure.** If the
+internal iteration settles, you can stop early and save compute, the answer stops
+depending on the exact value of $K$, and — the part easy to miss — the
+$K \cdot L$ BPTT depth of §7.2 **goes away**: at a fixed point the implicit
+function theorem gives the gradient without storing the internal trajectory,
+$O(1)$ memory in $K$. Per-token early stopping is also exactly Graves' adaptive
+computation time, derived from the dynamics rather than bolted on.
+
+**The trap.** Define the fixed-point map
+
+$$\Phi(x, h) \;=\; \lim_{K \to \infty} T^{K}\big(\mathrm{Inject}_x(h)\big),
+\qquad\text{so}\qquad h_{t+1} = \Phi(x_{t+1}, h_t)$$
+
+Convergence in $k$ and memory in $t$ are *different quantities*, and they are in
+tension. If $T$ is a **global contraction** with rate $\rho < 1$, then
+$\|\partial\Phi/\partial h\| \le \rho^{K} \to 0$: the fixed point stops depending
+on $h$ at all and the model becomes **memoryless**, a feedforward network applied
+per token. That is §4.3.1's finite-impulse-response result restated on the
+internal timescale.
+
+So the condition to aim for is sharp:
+
+> $T$ must **converge without being a global contraction in $h$** — which means
+> multiple fixed points, so that *which basin* is reached encodes the memory.
+
+Memory then lives in the identity of an attractor rather than in a decaying
+transient, and does not decay at all. This is an attractor/associative-memory
+network, and is the Radhakrishnan et al. iterated-autoencoder line the paper
+already cites as close in spirit.
+
+#### The input conditions the landscape — do not read the above as $h$-only
+
+The framing just given is incomplete in an important way. For a held input $x$,
+the internal map $T_x$ has a fixed-point set $\mathcal{F}(x)$, and
+
+> **$x$ determines what that set *is*; $h$ determines which element of it is
+> reached.**
+
+Both dependencies are required, and they do different jobs:
+
+$$\frac{\partial \Phi}{\partial x} \neq 0 \quad \text{(the model responds to input at all)}
+\qquad
+\frac{\partial \Phi}{\partial h} \neq 0 \quad \text{(the model remembers)}$$
+
+**The $x$-dependence is the more basic of the two.** A converged state that
+ignores $x_t$ computes nothing, memory or no memory. Whereas
+$\partial\Phi/\partial x \neq 0$ with $\partial\Phi/\partial h = 0$ is still a
+functional model — a DEQ, a feedforward network per token; useful, merely not
+recurrent. So the collapse warned about above is the *less* severe of the two
+failure modes.
+
+The right mental picture is therefore not "a fixed landscape whose basins are
+indexed by $h$" but **$x_t$ reshapes the landscape that $h_t$ navigates**. The
+input behaves as a *bifurcation parameter* rather than a perturbation: as $x$
+varies, fixed points of $T_x$ are created and destroyed, changing how many basins
+exist and where they sit.
+
+> **Terminology, loosely used.** "Bifurcation parameter" here is descriptive, not
+> a claim that any particular normal form has been identified. No continuation has
+> been run and nothing has been classified as saddle-node, pitchfork or Hopf in
+> the general high-dimensional case. The one place the term is used *literally*
+> in this repository is
+> `notebooks/8-rcp-fixed-points-and-bistability.ipynb`, which reduces to
+> `hidden_size = 1`, where the fold is genuinely a saddle-node and can be
+> exhibited.
+
+Two consequences:
+
+- **This is a third and stronger justification for $M_{xx} = I$ (§8.6).** Holding
+  $x$ constant across the $K$ internal iterations is what makes $T_x$, and hence
+  $\mathcal{F}(x)$, *well defined at all*. Without input persistence there is no
+  input-conditioned map to have fixed points of, and the whole landscape picture
+  evaporates. §8.6 argues from impulse response and gradient path length; this is
+  the deeper reason.
+- **Input-conditioned dynamics is the load-bearing ingredient in the closest
+  state-of-the-art relatives.** Mamba's selectivity is exactly input-dependent
+  state transition — the input conditioning the map rather than merely forcing
+  it. The paper already cites Gu & Dao alongside S4 in §1, so this is not a
+  speculative extension.
+
+**Consequence for a convergence loss.** The obvious
+$\mathcal{L}_{\text{conv}} = \|z^{(K)} - z^{(K-1)}\|$ is **globally minimized by
+the degenerate solution** — one attractor, no $h$-dependence, zero memory. It
+does not merely permit the failure mode, it points at it. The task loss opposes
+this, so the pair may well train fine, but they are adversarial and the balance
+must be monitored rather than assumed.
+
+Two safer formulations:
+
+- **Measure three things, not one.** Convergence $\|z^{(k)} - z^{(k-1)}\| \to 0$,
+  input sensitivity $\|\partial\Phi/\partial x\| \not\to 0$, and memory
+  $\|\partial\Phi/\partial h\| \not\to 0$. Together they say "settles, responds,
+  and still remembers"; any one alone is misleading, and the three fail
+  independently for different reasons.
+
+  Note the diagnostic currently in `examples/rnn_internal_iterations.py` measures
+  $\partial h_t/\partial x_0$, which is a *product* of these — roughly
+  $\|\partial\Phi/\partial x\| \cdot \|\partial\Phi/\partial h\|^{t}$ — and so
+  cannot distinguish a model that has stopped responding from one that has
+  stopped remembering. It should be factored.
+- **Penalize the spectrum, not the difference.** Push the spectral radius of
+  $J_T$ toward slightly below 1 rather than toward 0 — convergence with a long
+  memory, rather than convergence by collapse. This is what the DEQ literature
+  settled on for the same problem (Bai, Koltun & Kolter, *Stabilizing Equilibrium
+  Models by Jacobian Regularization*, 2021, penalizing $\|J\|_F$ with a
+  Hutchinson estimator).
+
+**Caveat on the existing measurement.** The memory-horizon numbers in
+`examples/rnn_internal_iterations.py` are taken **at initialization**, where a
+randomly-initialized contraction having no memory is nearly a tautology. What the
+*trained* spectrum does is the real question and has not been looked at. Training
+may push $\rho$ toward 1 on its own when the task demands memory, in which case
+the orthogonal initialization is providing a better starting point rather than
+repairing anything fundamental.
 
 ---
 
