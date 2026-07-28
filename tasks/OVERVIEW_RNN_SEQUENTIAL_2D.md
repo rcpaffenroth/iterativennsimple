@@ -14,10 +14,18 @@ ideas below do not have to be relitigated.
 | `examples/rnn_internal_iterations.py` | extended experiment on $K > 1$ |
 | `tests/test_Sequential2DRNN.py` | the invariants, mostly the silent ones |
 
-This document remains the record of *why*; the README is the record of *how*. Note
-one divergence from §5.2 below: `from_rnn` builds the **two**-slot map $[x, h]$ of
-eq. (9), since `torch.nn.RNN` has no readout and the $y$-slot would be vestigial.
-The three-slot layout is what `from_3x3` gives you.
+| `TODO_Sequential2DRNN.md` | deferred work and the experiment queue |
+| `README_RCP.md` | RCP's review checklist, annotated with his responses |
+| `notebooks/advanced/12-claude-fixed-points-and-bistability.ipynb` | the dynamical-systems tutorial at `hidden_size = 1` |
+
+This document remains the record of *why*; the README is the record of *how*.
+
+Note one divergence from §5.2 below: `from_rnn` builds the **two**-slot map
+$[x, h]$ of eq. (9), since `torch.nn.RNN` has no readout — its `output` *is* the
+hidden sequence — so a $y$-slot would be vestigial *and* lagged. The readout you
+would normally compose afterwards is available as the **observation map** of §5.5,
+which is the right home for it. The three-slot layout is what `from_3x3` gives
+you, and its $y$-slot exists for feedback rather than for readout.
 
 ---
 
@@ -266,7 +274,50 @@ Two things this must get right:
 > path cannot express an RNN. The per-slot `A` above is the fix, and it is the one genuinely
 > new primitive this module needs.
 
-### 5.5 Construction: the factory pattern
+### 5.5 The observation map $g$ — a readout is not a slot
+
+The four operators above are the **state map**. The reported output is separate:
+
+$$z_{t+1} = F(z_t, x_{t+1}) \qquad\text{(state map, the composition above)}$$
+$$y_t = g(z_t) \qquad\text{(observation map)}$$
+
+This is the classical state-space form — S4, MAMBA and ordinary linear control all
+write it this way, and their $C$ matrix is an *observation*, not a state component.
+Implemented as `Sequential2DRNN.observe`.
+
+**Why this is a distinct mechanism from a $y$-slot**, rather than a stylistic
+choice. There are two things one might mean by "the output", and they behave
+differently:
+
+| | lag | can feed back | is it in $M$? |
+| --- | --- | --- | --- |
+| $y$ as a **state slot**, via $W_{hy}$ | one internal iteration (§8.3) | yes, via $W_{yh}$ | yes |
+| $y$ as an **observation**, via $g$ | none | no, by construction | no |
+
+The lag is not incidental: the update is Jacobi, so a block writing into the
+$y$-slot reads the $h$ from *before* the step. At $K = 1$ that is a full token of
+delay, which is simply the wrong answer for an ordinary readout. As $K$ grows and
+the internal iteration converges the lag shrinks, since
+$h^{(K-1)} \to h^{(K)}$ — so it is worst exactly in the RNN-compatible regime.
+
+Conversely, feedback *requires* the slot: the paper's above-diagonal $S$ (§6.4)
+cannot be an observation, because an observation cannot influence the dynamics.
+
+So: **use `readout` (the observation) for an ordinary readout; use the $y$-slot
+when you want feedback.** Both can coexist — the slot may carry $W_{yh}$ feedback
+while `readout` supplies the reported output.
+
+One consequence worth stating because it looks like an inconsistency: **the
+"bias belongs to the slot" rule of §8.2 does not apply to $g$.** A plain
+`torch.nn.Linear` with its own bias is exactly right as a `readout`, because $g$
+sits outside the block matrix and there is no slot sum for it to double-count
+against.
+
+`from_rnn(rnn, readout=None)` returns $h_t$, which is what makes it bit-comparable
+with `nn.RNN` — that module has no readout at all, and its `output` *is* the
+hidden sequence.
+
+### 5.6 Construction: the factory pattern
 
 Follow the existing `Sequential2D.from_config` style (`Sequential2D.py:163`). The core module
 stays $N$-slot generic (§4.1); the ergonomics live in classmethod factories.
@@ -457,8 +508,11 @@ $h = h^{(K)}$ — **lag is exactly one internal step, independent of $K$.**
 
 Consequences:
 - For `nn.RNN`'s `output` tensor, read the **$h$-slot** after each external step.
-- If you want to read the $y$-slot instead, take it shifted by one and run one extra flush
-  iteration at the end of the sequence.
+- **For an ordinary readout, use the observation map $g$ of §5.5, not a slot.** That is the
+  real resolution of this trap: $g$ reads the current state, so it has no lag. The slot route
+  exists for when feedback is wanted, and then the lag is the price.
+- If you do read the $y$-slot, take it shifted by one and run one extra flush iteration at
+  the end of the sequence.
 - **Document this in the module docstring.** It is self-consistent but surprising, and it is
   a standing trap in every readout-slot configuration.
 
@@ -486,6 +540,24 @@ efficiency mechanism and the notation that keeps the code looking like the mathe
 
 **Exact `nn.RNN` multi-layer stacking is explicitly out of scope.** The Jacobi update is the
 intended semantics, not a limitation to be worked around.
+
+> **This section is about $L$, not $K$ — they are different axes, and an earlier draft read
+> as though they were the same.**
+>
+> - **$K$** (§7) is *how many times the internal map runs per token*. Each internal step does
+>   overwrite the hidden slot, so after $K$ steps the hidden state has been replaced $K$
+>   times. That is intended, and is what §7 is about.
+> - **$L$** (this section) is *how many hidden slots there are* —
+>   $h^{(1)}, \ldots, h^{(L)}$, i.e. a stacked or deep RNN. The wavefront is about how
+>   information moves *between* those slots.
+>
+> The two are independent. The wavefront arises already at $K = 1$, and — first corollary
+> below — **raising $K$ does not fix it.**
+>
+> **In the code as it stands there is exactly one hidden slot, so this section is currently
+> vacuous.** It is a pre-commitment about what happens when the multi-slot states of §4.1 get
+> built, written down now so the decision is not made silently later by whoever writes that
+> code.
 
 For context, PyTorch's stacked RNN is
 
@@ -651,7 +723,9 @@ Deferred, not rejected. Revisit when $K > 1$ experiments are actually running.
 
 - **`bidirectional`** — mechanically a second parameter set run over reversed time, outputs
   concatenated. Not yet scoped.
-- **`PackedSequence`** — real `nn.RNN` accepts it. Meaningfully more code. Needed?
+- ~~**`PackedSequence`**~~ — **done**, `forward_packed`. It turned out to segregate
+  cleanly: packing changes only how many rows of the batch are alive per step, so the
+  four operators of §5 are untouched and the whole of it is confined to one method.
 - **`batch_first`, `dropout`** — mechanical, but confirm they are in scope.
 - **Should $K$ be allowed to vary** (per layer, per timestep, adaptive)? Start constant.
   See §10.3 — adaptive $K$ falls out of convergence for free.
@@ -775,6 +849,38 @@ Two safer formulations:
   settled on for the same problem (Bai, Koltun & Kolter, *Stabilizing Equilibrium
   Models by Jacobian Regularization*, 2021, penalizing $\|J\|_F$ with a
   Hutchinson estimator).
+
+#### RCP's amendment: training already opposes the degenerate solution
+
+Reviewing the above, RCP made the following point, and it is right:
+
+> If different $y$ outputs are part of the training process, and we achieve low loss, then the
+> model will have learned to converge to the *various* correct $y$ outputs.
+
+Agreed, and it materially weakens the warning as originally written. The degenerate
+solution — one attractor, no $h$-dependence — has *high task loss* on any task that needs
+memory. So it is not a competing optimum of $\mathcal{L}_{\text{task}} +
+\mathcal{L}_{\text{conv}}$; at low total loss the model necessarily distinguishes whatever
+the task requires it to distinguish, which is exactly $\partial\Phi/\partial h \neq 0$ where
+it matters. The warning above is therefore **not** an argument against adding a convergence
+loss.
+
+What survives is narrower, and is about **optimisation dynamics rather than optima**:
+
+- $\nabla\mathcal{L}_{\text{conv}}$ is well conditioned near the degenerate solution, while
+  $\nabla\mathcal{L}_{\text{task}}$ through a near-contraction is exponentially small in $K$.
+  The memory-horizon table in `examples/rnn_internal_iterations.py` shows this reaching
+  *numerically zero* at $K = 4$ — and a zero gradient means the task loss cannot inform those
+  parameters at all.
+- So the failure mode is not "training picks the degenerate optimum", it is "training never
+  reaches a region where the task loss has anything to say". The premise *if we achieve low
+  loss* is precisely what is at risk.
+
+Which makes this an empirical question, not one to be settled by argument. **Sweep the
+convergence-loss weight and watch whether the task loss ever drops**, monitoring
+$\partial\Phi/\partial h$ alongside. If it trains, RCP is right and the concern was
+overstated. Initialisation will matter more than the loss weight, for the reasons in §8.6 and
+the orthogonal-init result in that example.
 
 **Caveat on the existing measurement.** The memory-horizon numbers in
 `examples/rnn_internal_iterations.py` are taken **at initialization**, where a

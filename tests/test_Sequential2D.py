@@ -417,3 +417,72 @@ def test_sequential2D_monarch_mixed_blocks():
     X_out = model.forward(X_in)
     assert X_out.shape == (10, 64), f"Expected shape (10, 64), got {X_out.shape}"
 
+
+
+# ---------------------------------------------------------------------------
+# dtype preservation
+# ---------------------------------------------------------------------------
+# forward_vector used to build its accumulator with torch.zeros(..., device=...)
+# and no dtype=, which pinned every result to float32: a float64 input was
+# silently *demoted* (losing precision) and a float16 one promoted (losing the
+# reason for using it).  These tests cover every forward in the package so the
+# same omission cannot reappear elsewhere.
+
+import pytest
+
+DTYPES = [torch.float64, torch.float32, torch.float16]
+
+
+@pytest.mark.parametrize('dtype', DTYPES)
+def test_dtype_forward_vector(dtype):
+    model = Sequential2D([3, 4], [3, 4],
+                         [[torch.nn.Linear(3, 3), torch.nn.Linear(3, 4)],
+                          [torch.nn.Linear(4, 3), torch.nn.Linear(4, 4)]]).to(dtype)
+    X_out = model.forward_vector(torch.randn(5, 7, dtype=dtype))
+    assert X_out.dtype == dtype, f'forward_vector returned {X_out.dtype}'
+
+
+@pytest.mark.parametrize('dtype', DTYPES)
+def test_dtype_forward_list(dtype):
+    model = Sequential2D([3, 4], [3, 4],
+                         [[torch.nn.Linear(3, 3), torch.nn.Linear(3, 4)],
+                          [torch.nn.Linear(4, 3), torch.nn.Linear(4, 4)]]).to(dtype)
+    X_out = model.forward_list([torch.randn(5, 3, dtype=dtype),
+                                torch.randn(5, 4, dtype=dtype)])
+    for i, X in enumerate(X_out):
+        assert X.dtype == dtype, f'forward_list slot {i} returned {X.dtype}'
+
+
+@pytest.mark.parametrize('dtype', DTYPES)
+def test_dtype_masked_linear(dtype):
+    out = MaskedLinear(8, 8).to(dtype)(torch.randn(4, 8, dtype=dtype))
+    assert out.dtype == dtype
+
+
+@pytest.mark.parametrize('dtype', DTYPES)
+@pytest.mark.parametrize('use_views', [True, False])
+def test_dtype_monarch_linear(dtype, use_views):
+    model = MonarchLinear.from_uniform_blocks(8, 8, num_blocks=2, seed=0).to(dtype)
+    out = model(torch.randn(4, 8, dtype=dtype), use_views=use_views)
+    assert out.dtype == dtype
+
+
+@pytest.mark.parametrize('dtype', DTYPES)
+def test_dtype_identity(dtype):
+    from iterativennsimple.Sequential2D import Identity
+    out = Identity(in_features=5, out_features=5)(torch.randn(3, 5, dtype=dtype))
+    assert out.dtype == dtype
+
+
+@pytest.mark.parametrize('dtype', DTYPES)
+def test_dtype_agreement_between_forwards(dtype):
+    """The two forward paths must agree in value as well as in dtype."""
+    model = Sequential2D([3, 4], [3, 4],
+                         [[torch.nn.Linear(3, 3), torch.nn.Linear(3, 4)],
+                          [torch.nn.Linear(4, 3), torch.nn.Linear(4, 4)]]).to(dtype)
+    X_in = torch.randn(5, 7, dtype=dtype)
+    from_vector = model.forward_vector(X_in)
+    from_list = torch.cat(model.forward_list([X_in[:, :3], X_in[:, 3:]]), dim=1)
+    assert from_vector.dtype == from_list.dtype == dtype
+    tolerance = 1e-2 if dtype == torch.float16 else 1e-6
+    assert torch.allclose(from_vector, from_list, atol=tolerance)

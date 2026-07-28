@@ -61,6 +61,15 @@ model = Sequential2DRNN.from_3x3(
 )
 ```
 
+Variable-length batches work as they do with `nn.RNN` — pass a `PackedSequence`
+and get one back:
+
+```python
+from torch.nn.utils.rnn import pack_padded_sequence
+packed = pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False)
+output, h_n = model(packed)          # output is a PackedSequence; h_n is (1, batch, hidden)
+```
+
 Naming is **source-first**: `W_ab` maps slot `a` to slot `b`. Any module carrying
 `in_features` and `out_features` works as a block — `MaskedLinear`,
 `MonarchLinear`, `SparseLinear`, `Sequential1D`, or a nested `Sequential2D`.
@@ -102,9 +111,20 @@ defaults to `bias=True`, which double-counts. `from_3x3` asserts against it.
 PyTorch's two RNN biases become one: $b_h = b_{ih} + b_{hh}$, which is exact for
 the forward pass but does not round-trip back to a `torch.nn.RNN` `state_dict`.
 
-**4. A readout slot lags by one internal iteration.** The update is *Jacobi* —
-every block reads the old state — so $y$ sees the $h$ from before the step. For
-`torch.nn.RNN`'s `output`, read the $h$-slot, which is what `from_rnn` does.
+**4. A readout is an *observation*, not a slot — and the difference is a one-step
+lag.** The state map and the reported output are separate objects:
+
+$$z_{t+1} = F(z_t, x_{t+1}) \qquad\qquad y_t = g(z_t)$$
+
+which is how S4, MAMBA and linear control are all written. Pass `readout=` and it
+becomes $g$: reads the current state, no lag, cannot feed back. Carry the readout
+in the $y$-*slot* instead and it goes through the block map, which is a **Jacobi**
+update, so it lands one internal iteration behind — a full token of delay at
+$K = 1$. Use the slot only when you want feedback (the paper's $S$ block); use
+`readout` otherwise.
+
+Note the bias rule in item 3 does *not* apply to `readout`: it sits outside the
+block matrix, so an ordinary biased `nn.Linear` is correct there.
 
 **5. `None` means "not yet alive", not "zero".** A slot nothing has written to
 stays `None`, and $b$ and $A$ skip it. This is *not* the same as holding a zero
@@ -121,7 +141,7 @@ reasons in the overview.
   diagonal *wavefront*, where information takes $l$ steps to reach slot $l$. That
   differs from `torch.nn.RNN`'s stacking, and keeping the construction one block
   map is worth more than matching it. `from_rnn` asserts `num_layers == 1`.
-- **`bidirectional`, `PackedSequence`, `dropout`.** Not scoped yet.
+- **`bidirectional`, `dropout`.** Not scoped yet.
 - **The lifted formulation** (dimension $|h| + T(|x|+|h|)$, eq. 15 of the paper).
   Elegant — it makes RNN and MLP literally the same fixed map — but it bakes the
   sequence length into the architecture, costs $\Theta(T^2)$, and its blocks
@@ -135,5 +155,6 @@ reasons in the overview.
 ## Status
 
 Implemented and tested: the `torch.nn.RNN` equivalence, the general three-slot
-map, arbitrary and nested block types, and $K > 1$. Open questions are collected
+map, the observation map, `PackedSequence`, arbitrary and nested block types, and
+$K > 1$. Deferred work is in `TODO_Sequential2DRNN.md`; open design questions are
 in §10 of the overview.

@@ -1,6 +1,6 @@
 [project]
 name = "iterativennsimple"
-version = "0.4.1"
+version = "0.5.0"
 description = "A simple version of iterativenn to get people started"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"

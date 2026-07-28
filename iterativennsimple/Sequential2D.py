@@ -124,7 +124,11 @@ class Sequential2D(torch.nn.Module):
 
     def forward_vector(self, X_in):
         assert X_in.shape[1] == self.in_features, f'The input has the wrong number of features. {X_in.shape, self.in_features }'
-        X_out = torch.zeros((X_in.shape[0], self.out_features), device=X_in.device)
+        # dtype must be taken from the input.  Without it this accumulator is
+        # always float32, which silently demotes a float64 input (losing
+        # precision) and promotes a float16 one (losing the point of using it).
+        X_out = torch.zeros((X_in.shape[0], self.out_features),
+                            device=X_in.device, dtype=X_in.dtype)
 
         for i in range(len(self.in_features_list)):
             for j in range(len(self.out_features_list)):
