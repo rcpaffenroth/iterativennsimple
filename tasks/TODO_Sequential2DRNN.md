@@ -112,8 +112,10 @@ directories. Tables in `examples/lra_runs/*/results.md`.
 - [x] **Epoch budget dominated the comparisons made before it was fixed.** `nn.GRU h=512` sat at 0.159
       val at epoch 15, 0.326 at 20, and 0.447 at 30 — still climbing. Any comparison
       made before epoch ~16 on this task compares models that have not started
-      learning. `was_truncated()` in the harness now flags rows that had not
-      plateaued; treat flagged numbers as lower bounds.
+      learning. Check the `epoch` column against the epoch budget: a best epoch at
+      or near the last one means the number is a lower bound. (A `was_truncated()`
+      helper used to flag this automatically and was removed — a reader sees it from
+      the table unaided, so the detector was machinery standing in for noticing.)
 - [ ] **Monarch as a regulariser: UNRESOLVED, not answered.** At $d_h = 2048$
       fixed, seq 256, one seed, all rows at lr 1e-4 (val): dense 0.243, nb=2 0.239,
       nb=4 0.205, nb=8 0.161, nb=16 0.151, and the parameter-matched control
@@ -153,8 +155,10 @@ directories. Tables in `examples/lra_runs/*/results.md`.
       arbitrarily; the argument for shortening gave a direction, not a number.
       Re-run at `step_size: 1` before quoting this against anything at seq 1024.
 - [x] **More Monarch blocks costs more time, not less.** 8.4 -> 18.2 -> 24.7 -> 47.6
-      -> 92.1 s/epoch as parameters fell 4.23 M -> 0.06 M: an 11x slowdown for a 70x
-      parameter reduction. Each block is a small matmul plus a gather and we are
+      -> 92.1 s/epoch as $W_{hh}$ parameters fell 4.19 M -> 0.033 M: an 11x slowdown
+      for a 128x parameter reduction. (An earlier revision said 4.23 M -> 0.06 M and
+      70x, mixing the *total* parameter count into a $W_{hh}$ comparison.
+      $|W_{hh}| = 2 d_h^2/\text{nb}^2$.) Each block is a small matmul plus a gather and we are
       launch-bound, so cost is roughly linear in `nb` while FLOPs fall as
       $1/\text{nb}^2$. The FLOP-saving role of block count needs $d_h$ in the tens of
       thousands. `MonarchLinear.forward(use_views=False)` is 1.8-2.2x faster and is

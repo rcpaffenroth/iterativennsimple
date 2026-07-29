@@ -24,11 +24,19 @@ amortising launches.  Measured on an RTX 4090, seq_len=1024, batch 64:
     512    164 ms  21.7 ms   7.5x
    2048    160 ms  77.7 ms   2.1x
 
-`step_size` trades sequence length for input width and is the main cost lever, but
-it is NOT a free speed dial: it sets both `seq_len = x_y_index // step_size` and
-`input_size = step_size`, so two runs at different values are different tasks.
-Never compare across `step_size` values.  Times are reported in the output table so
-the cost is never invisible.
+CAVEAT on those numbers: they are NOT training steps.  A measured 30.1 s/epoch over
+125 train batches at d_h=128 is 241 ms per training step, and `image_wide/config.yaml`
+and `lra_runs/README.md` quote 232-234 ms for what they also call "ms/batch".  What
+the 162-series above actually measures was not written down.  The gap *ratios* are
+probably unaffected if both columns were measured the same way, but that is an
+assumption.  Re-measure before quoting an absolute number.
+
+To make a run cheaper, use `max_points`: it drops rows, so it costs statistical
+power and leaves the task identical.  `step_size` is NOT a cost lever -- it sets
+both `seq_len = x_y_index // step_size` and `input_size = step_size`, so it
+shortens the sequence *and* widens the input, and two runs at different values are
+two different tasks.  Never compare across `step_size` values.  Times are reported
+in the output table so the cost is never invisible.
 """
 
 import json
@@ -44,7 +52,6 @@ import torch
 import yaml
 from generatedata.load_data import load_data_as_sequence
 
-from iterativennsimple.MaskedLinear import MaskedLinear
 from iterativennsimple.MonarchLinear import MonarchLinear
 from iterativennsimple.Sequential2D import Identity
 from iterativennsimple.Sequential2DRNN import Sequential2DRNN
@@ -64,8 +71,12 @@ def load_task(cfg):
     `step_size` is how many raw features become one timestep:
     `seq_len = x_y_index // step_size`.  At step_size 1 each timestep is a single
     scalar -- the LRA definition -- and the sequence is as long as it gets.  Larger
-    values patchify, trading sequence length for input width, which is the only
-    practical lever on run time here.
+    values patchify, which changes the task rather than making it cheaper: they set
+    `input_size = step_size` as well.  Use `max_points` below for cost.
+
+    Returns the three splits, the per-timestep shape, and `num_classes` counted over
+    *all* rows.  Counting on the train split alone would build too small a head if
+    the last class happened not to be drawn into it.
     """
     name, step_size = cfg['name'], cfg['step_size']
 
@@ -97,7 +108,9 @@ def load_task(cfg):
     splits = {'train': order[:n_train],
               'val': order[n_train:n_train + n_val],
               'test': order[n_train + n_val:]}
-    return {split: (X[idx], labels[idx]) for split, idx in splits.items()}, X.shape[1:]
+    num_classes = int(labels.max().item()) + 1
+    return ({split: (X[idx], labels[idx]) for split, idx in splits.items()},
+            X.shape[1:], num_classes)
 
 
 def batches(X, y, batch_size, shuffle, device, generator=None):
@@ -175,8 +188,6 @@ def make_block(kind, in_features, out_features, spec):
         return MonarchNoViews(MonarchLinear.from_uniform_blocks(
             in_features, out_features, num_blocks=spec.get('num_blocks', 4),
             bias=False, seed=spec.get('seed', 0)))
-    if kind == 'masked':
-        return MaskedLinear(in_features, out_features, bias=False)
     raise ValueError(f'unknown block type {kind!r}')
 
 
@@ -364,16 +375,34 @@ def write_report(directory, cfg, shape, results, num_classes):
              f'| learning rate | {cfg["training"]["lr"]} (per-model overrides shown in the table) |',
              f'| gradient clip | {cfg["training"]["grad_clip"]} |',
              f'| device | {cfg["training"]["device"]} |',
-             '',
-             '## Results', '',
-             'Test accuracy is from the epoch with the best validation accuracy.',
-             f'One seed. Validation and test splits are '
-             f'{len(results["_splits"]["val"])} and {len(results["_splits"]["test"])} '
-             f'rows, so the standard error on any accuracy near {chance * 2:.2f} is '
-             f'about {(chance * 2 * (1 - chance * 2) / len(results["_splits"]["val"])) ** 0.5:.3f}.',
-             '',
-             '| model | params | lr | best val acc | test acc | epoch | train time | s / epoch |',
-             '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+             '']
+
+    # The run's own caveat, written in its config so that re-running preserves it.
+    # Anything a reader must see before the table goes here; the generator does not
+    # write interpretation of its own (PRINCIPLES Sec. 1.3).
+    if cfg.get('notes'):
+        lines += [('> ' + line).rstrip() for line in cfg['notes'].rstrip().splitlines()]
+        lines += ['']
+
+    # Quote the resolution limit where the reader is actually comparing -- at the
+    # best accuracy in this table -- rather than at a fixed guess.  Non-finite rows
+    # are excluded for the same reason `best` excludes them: a diverged model must
+    # not set the scale.  sqrt(p(1-p)/n) is evaluation sampling noise only; with one
+    # seed there is no measurement of seed-to-seed variation at all.
+    finite_acc = [r['test_acc'] for r in results['models'].values()
+                  if np.isfinite(r['test_acc'])]
+    n_val = len(results['_splits']['val'])
+    p = max(finite_acc)
+
+    lines += ['## Results', '',
+              'Test accuracy is from the epoch with the best validation accuracy.',
+              f'One seed. Validation and test splits are '
+              f'{n_val} and {len(results["_splits"]["test"])} '
+              f'rows, so the standard error at the best accuracy here '
+              f'({p:.3f}) is about {(p * (1 - p) / n_val) ** 0.5:.3f}.',
+              '',
+              '| model | params | lr | best val acc | test acc | epoch | wall clock | s / epoch (incl. val) |',
+              '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
 
     for name, r in results['models'].items():
         epochs_run = len(r['history']['train_loss'])
@@ -440,9 +469,8 @@ def main(directory):
         device = cfg['training']['device'] = 'cpu'
 
     print(f'loading {cfg["dataset"]["name"]} ...', flush=True)
-    data, shape = load_task(cfg['dataset'])
+    data, shape, num_classes = load_task(cfg['dataset'])
     seq_len, step_size = int(shape[0]), int(shape[1])
-    num_classes = int(data['train'][1].max().item()) + 1
     print(f'  seq_len={seq_len} step_size={step_size} classes={num_classes} '
           f'train/val/test={len(data["train"][0])}/{len(data["val"][0])}/'
           f'{len(data["test"][0])}', flush=True)
@@ -463,13 +491,14 @@ def main(directory):
                                                 device, lr=lr)
         results['models'][spec['name']]['lr'] = lr
 
-    write_curves(directory, cfg, results, num_classes)
-    write_report(directory, cfg, shape, results, num_classes)
-
     # Machine-readable alongside the markdown, for replotting without retraining.
+    # Written FIRST so that hours of training survive a mistake in the reporting.
     serialisable = {name: {k: v for k, v in r.items()}
                     for name, r in results['models'].items()}
     (directory / 'results.json').write_text(json.dumps(serialisable, indent=2))
+
+    write_curves(directory, cfg, results, num_classes)
+    write_report(directory, cfg, shape, results, num_classes)
 
     print(f'\nwrote {directory / "results.md"}, {directory / "curves.png"}, '
           f'{directory / "results.json"}')

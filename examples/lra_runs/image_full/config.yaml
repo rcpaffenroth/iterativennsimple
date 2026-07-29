@@ -1,20 +1,41 @@
 # LRA image at the real definition: one pixel per timestep, seq_len = 1024.
 #
-# UNDERTRAINED -- 20 epochs is not enough, and this was measured after the run.
-# nn.GRU h=512 in image_wide_lr/ reached 0.159 val at epoch 15, 0.326 at 20 and
-# 0.447 at 30, still climbing.  So every number this config produces is a lower
-# bound taken before the models had finished learning, and image_wide_lr/ supersedes
-# it for anything at seq 1024.  Left at 20 for the record; raise to 30+ before
-# quoting it.
+# UNDERTRAINED at 20 epochs.  The full statement is in `notes:` below, where the
+# reader of results.md will actually see it.
 #
 # Cost.  Sequential2DRNN runs a Python loop and is launch-bound, so its cost is flat
-# in hidden width and linear in sequence length: ~230 ms/batch at seq 1024, batch
-# 64, for any d_h from 128 to 2048.  cuDNN is much faster at small d_h and the gap
-# closes as d_h grows (94x at 128, 2.1x at 2048), so the often-quoted "~100x" is a
-# small-hidden artefact and not a property of the method.  About 30 s/epoch for
-# K=1 here, 60 for K=2.
+# in hidden width and linear in sequence length.  cuDNN is much faster at small d_h
+# and the gap closes as d_h grows (94x at 128, 2.1x at 2048), so the often-quoted
+# "~100x" is a small-hidden artefact and not a property of the method.  Measured
+# here: about 30 s/epoch for K=1, 60 for K=2, which over 125 train batches is
+# ~240 ms per training step.  (Do not mix that with the 162 ms figure quoted in the
+# module docstring -- that is a different measurement and its provenance was not
+# recorded.  See the caveat there.)
 #
 #   uv run python examples/lra_benchmark.py examples/lra_runs/image_full
+
+# The banner below is emitted verbatim into results.md, above the table, every time
+# this config is run.  Comments are not -- yaml.safe_dump drops them -- so anything a
+# reader must not miss belongs in `notes:`, not up here.
+notes: |
+  ## READ THIS BEFORE USING THESE NUMBERS
+
+  **Undertrained.** 20 epochs is below where models start learning on this task,
+  and that was measured after the run. `nn.GRU h=512` reached 0.159 val accuracy at
+  epoch 15, 0.326 at 20 and 0.447 at 30, still climbing. Every number here is
+  therefore a lower bound taken before the models had finished learning, and
+  `image_wide_lr/` supersedes this run for anything at seq 1024.
+
+  Left at 20 epochs for the record. Raise to 30+ before quoting it.
+
+  One thing here is solid: `nn.RNN` has 18,058 parameters against
+  `Sequential2DRNN K=1`'s 17,930, a difference of exactly 128 = `hidden_size`.
+  That is PyTorch's second bias vector, folded into one per Sec. 8.2 of
+  `tasks/OVERVIEW_RNN_SEQUENTIAL_2D.md`, showing up in a parameter count.
+
+  The `orth` rows are a null result at gain 1.2 (0.1330 against 0.1530 for default
+  init). Combined with gain 1.0 failing in `image_wide/`, the orthogonal-init
+  hypothesis has failed to transfer twice at seq 1024.
 
 dataset:
   name: lra_image

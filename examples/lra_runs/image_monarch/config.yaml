@@ -37,13 +37,40 @@
 # note in image_wide_lr/config.yaml.
 #
 # STEP_SIZE WARNING.  This config uses step_size 4 while image_full/, image_wide/
-# and image_wide_lr/ use 1.  step_size sets both `seq_len` and `input_size`, so this
-# is a DIFFERENT TASK with a 4x wider input -- not a shorter version of the same one.
-# Nothing here may be placed on the same axis as a step_size 1 run.  Re-run at
-# step_size 1, using `max_points` for cost, before drawing any conclusion meant to
-# apply to LRA image.  The value 4 was chosen arbitrarily.
+# and image_wide_lr/ use 1, so it is a DIFFERENT TASK.  Re-run at step_size 1, using
+# `max_points` for cost, before drawing any conclusion meant to apply to LRA image.
+# Full statement in `notes:` below, which is what results.md shows the reader.
 #
 #   uv run python examples/lra_benchmark.py examples/lra_runs/image_monarch
+
+# Emitted verbatim into results.md above the table on every run.  Comments up top
+# are dropped by yaml.safe_dump; this is not.
+notes: |
+  ## SCOPE OF THESE NUMBERS
+
+  **Internally clean.** All five block-count rows and the parameter-matched
+  `dense h=724` control ran at the same lr (1e-4), epochs (30) and `step_size` (4),
+  so the ranking by block count is a fair comparison.
+
+  **But this is not the LRA task.** `step_size: 4` makes `seq_len` 256 rather than
+  1024 *and* `input_size` 4 rather than 1 — the model sees four adjacent pixels per
+  step, which is a 1D patch embedding. That is a different, easier task with a wider
+  input, not a shorter version of the same one. Do not place these numbers on the
+  same axis as any `step_size: 1` run. The value 4 was chosen arbitrarily.
+
+  **Weakly powered as a regularisation test.** The dense row's train/val gap was
+  only 0.04, and sparsity-as-regulariser needs a model that overfits substantially.
+
+  **Two rows had not plateaued** when the epoch budget ran out — `dense W_hh (4.19M)
+  lr=1e-4` (best val on epoch 27, train loss still descending) and `monarch nb=2
+  (2.10M)` (final train loss 1.9992, below dense's 2.0474). Their numbers are lower
+  bounds. Do not rank them against a converged row without giving them more epochs.
+
+  The row names count parameters **in `W_hh` only**; the `params` column is the
+  whole model, so `nb=4` shows 555,018 against the control's 535,046 even though
+  their $W_{hh}$ blocks match to 112 parameters. `results.json` for this run also
+  carries a `truncated` key per model, left by a `was_truncated()` helper that has
+  since been removed from the harness.
 
 dataset:
   name: lra_image
@@ -56,7 +83,7 @@ dataset:
 training:
   epochs: 30
   batch_size: 64
-  lr: 0.0001            # NOT 1e-3: d_h=2048 was unstable there, see below
+  lr: 0.0001            # NOT 1e-3: d_h=2048 was unstable there, see above
   grad_clip: 1.0
   seed: 0
   device: cuda
@@ -65,41 +92,41 @@ models:
   # Reference: is the dense model overfitting?  If train loss falls well below
   # validation loss, a regularizer has room to work.  If not, this whole run is
   # measuring nothing and the curves will say so.
-  - name: dense W_hh (4.19M in W_hh) lr=1e-4
+  - name: dense W_hh (4.19M) lr=1e-4
     type: sequential2d
     hidden_size: 2048
     K: 1
 
   # Bracket: is 1e-4 too low?  Sparse rows all use 1e-4, so if this beats it the
   # whole sweep needs redoing at the higher rate.
-  - name: dense W_hh (4.19M in W_hh) lr=3e-4
+  - name: dense W_hh (4.19M) lr=3e-4
     type: sequential2d
     hidden_size: 2048
     K: 1
     lr: 0.0003
 
-  - name: monarch nb=2 (2.10M in W_hh)
+  - name: monarch nb=2 (2.10M)
     type: sequential2d
     hidden_size: 2048
     K: 1
     W_hh: monarch
     num_blocks: 2
 
-  - name: monarch nb=4 (0.52M in W_hh)
+  - name: monarch nb=4 (0.52M)
     type: sequential2d
     hidden_size: 2048
     K: 1
     W_hh: monarch
     num_blocks: 4
 
-  - name: monarch nb=8 (0.13M in W_hh)
+  - name: monarch nb=8 (0.13M)
     type: sequential2d
     hidden_size: 2048
     K: 1
     W_hh: monarch
     num_blocks: 8
 
-  - name: monarch nb=16 (0.03M in W_hh)
+  - name: monarch nb=16 (0.03M)
     type: sequential2d
     hidden_size: 2048
     K: 1
@@ -111,7 +138,7 @@ models:
   # NOTE the match is on W_hh only: totals are 535,046 here against 555,018 for
   # nb=4, because h=724 also gets a smaller head and W_xh.  The control therefore
   # carries 3.6% FEWER parameters overall.
-  - name: dense h=724 control (0.52M in W_hh)
+  - name: dense h=724 control (0.52M)
     type: sequential2d
     hidden_size: 724
     K: 1

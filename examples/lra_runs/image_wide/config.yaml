@@ -5,21 +5,59 @@
 # that one seed cannot resolve.  So the comparison there had no signal to compare.
 #
 # Width is the cheapest thing to TRY, because Sequential2DRNN's cost is flat in d_h
-# -- the loop is launch-bound, not compute-bound.  Measured at seq 1024, batch 64:
-# 234 ms/batch at d_h 128, 231 at 512, 225 at 2048.  Cheap to run is not the same as
-# likely to work, and it is certainly not the same as cheap to *train*: the wide
-# models in image_wide_lr/ needed a much smaller learning rate, and nn.GRU h=2048
-# diverged outright at two of them.
+# -- the loop is launch-bound, not compute-bound.  Measured here as a training step
+# at seq 1024, batch 64: 234 ms at d_h 128, 231 at 512, 225 at 2048.  Cheap to run
+# is not the same as likely to work, and it is certainly not the same as cheap to
+# *train*: the wide models in image_wide_lr/ needed a much smaller learning rate,
+# and nn.GRU h=2048 diverged outright at two of them.
 #
-# SUPERSEDED, and its conclusion was WRONG.  This config holds lr fixed at 1e-3
-# across all widths, which is a step-size artefact rather than a capacity result --
-# train loss rose above ln(10) and worsened monotonically with width.  See
-# image_wide_lr/, and the banner in this directory's results.md.
+# SUPERSEDED, and its conclusion was WRONG.  Full statement in `notes:` below, which
+# is what results.md shows the reader.
 #
 # Dense W_hh only.  Sparsity is a separate question and confounds this one; see
 # image_monarch/ for that.
 #
 #   uv run python examples/lra_benchmark.py examples/lra_runs/image_wide
+
+# Emitted verbatim into results.md above the table on every run.  Comments up top
+# are dropped by yaml.safe_dump; this is not.
+notes: |
+  ## READ THIS BEFORE USING THESE NUMBERS
+
+  **This run does not answer the question it was built to ask.** Every row used
+  `lr = 0.001`. Our train losses rose *above* chance ($\ln 10 = 2.3026$) and got
+  monotonically worse with width — 2.2773, 2.3286, 2.4365 at $d_h$ 128 / 512 / 2048 —
+  and `nn.GRU h=2048` diverged to NaN at epoch 7. Train loss above chance and
+  worsening with width is the signature of too-large steps, not of a capacity
+  limit: the same learning rate moves further in function space for a wider model.
+
+  So the wide rows measure "wrong learning rate for this width", and the width
+  question is **unanswered**. See `image_wide_lr/`, which crosses $d_h$ with `lr`.
+
+  `nn.GRU h=2048` is a diverged run. Its 0.1300 / 0.1230 come from the last finite
+  epoch before it broke and are **not** a result. This run predates divergence
+  detection in the harness, so the row is not flagged in the table; later runs stop
+  at the first non-finite loss and mark the row `DIVERGED@n`.
+
+  Two things here *are* solid:
+
+  - **Reproducibility.** `nn.GRU h=128` and `Sequential2DRNN h=128` reproduce
+    `image_full/` to four decimal places, across a fused cuDNN path and a 1024-step
+    Python loop. `nn.GRU h=512` further agrees with `image_wide_lr/` on every one of
+    its 20 epochs of validation accuracy.
+  - **Cost is flat in width.** 30.1 / 29.6 / 29.3 s per epoch at $d_h$ = 128 / 512 /
+    2048: a 1.03x spread over a 16x width increase, against GRU's 0.5 -> 4.3 -> 19.7
+    (39x). This is Sec. 9.6 of `tasks/OVERVIEW_RNN_SEQUENTIAL_2D.md` confirmed under
+    real training rather than in a microbenchmark, and it is what makes
+    `image_wide_lr` affordable.
+
+  And one negative result that is solid: **`orth gain=1.0` did nothing.** 0.1310
+  against 0.1320 for default init. Combined with `gain=1.2` failing in
+  `image_full/`, the orthogonal-initialisation hypothesis from
+  `examples/rnn_internal_iterations.py` has now failed to transfer twice, at two
+  different gains. It should be treated as unsupported at $L = 1024$ rather than as
+  a fix awaiting the right gain, until someone measures the memory horizon on a
+  *trained* model at this depth instead of at initialisation at $L = 20$.
 
 dataset:
   name: lra_image

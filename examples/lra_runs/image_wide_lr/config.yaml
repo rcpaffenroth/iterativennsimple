@@ -14,8 +14,8 @@
 #
 # This run crosses d_h with lr instead of holding lr fixed.  It is affordable for
 # exactly the reason in Sec. 9.6 of tasks/OVERVIEW_RNN_SEQUENTIAL_2D.md: our cost is
-# flat in d_h (225-234 ms/batch from 128 to 2048), so nine of our rows cost what
-# nine narrow rows would.
+# flat in d_h (225-234 ms per training step from 128 to 2048), so nine of our rows
+# cost what nine narrow rows would.
 #
 # Divergence is now detected and reported: a model that goes non-finite is stopped
 # and its row is flagged, rather than quietly contributing its best pre-divergence
@@ -30,6 +30,34 @@
 # steeply with no plateau, so 30 is a floor rather than a generous choice.
 #
 #   uv run python examples/lra_benchmark.py examples/lra_runs/image_wide_lr
+
+# Emitted verbatim into results.md above the table on every run.  Comments up top
+# are dropped by yaml.safe_dump; this is not.
+notes: |
+  ## READ THIS BEFORE USING THESE NUMBERS
+
+  **The lr grid is unequal across widths, so "best per width" is not a fair
+  comparison.** $d_h$ 128 was run at one learning rate, 512 at two, 2048 at three.
+  Taking the best row per width therefore favours the wider models purely because
+  they had more attempts, and the grids do not overlap at $d_h = 128$ at all.
+
+  Read only the **matched-lr** pairs, which say width *hurts*:
+
+  - at lr 3e-4: h=512 gives 0.1490, h=2048 gives 0.1220
+  - at lr 1e-4: h=512 gives 0.1940, h=2048 gives 0.1450
+
+  Also note this run used 30 epochs where `image_wide/` used 20, so the two differ
+  in two variables at once and neither alone explains the difference between them.
+
+  Nearly every row here has its best epoch at or near 30, so the numbers are lower
+  bounds. Check the `epoch` column against the epoch budget yourself — the harness
+  used to flag this automatically and that machinery was removed, because a reader
+  sees it immediately from the table.
+
+  `GRU h=2048 lr=3e-4` went non-finite and was stopped at epoch 9. Its 0.1490 /
+  0.1450 are whatever it happened to reach before it broke, **not** a result. Lower
+  the learning rate or tighten `grad_clip` and re-run before comparing it to
+  anything.
 
 dataset:
   name: lra_image

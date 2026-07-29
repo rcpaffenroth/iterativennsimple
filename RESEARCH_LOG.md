@@ -94,7 +94,11 @@ Per-call at $d_h = 2048$, batch 64: dense 0.024 ms, nb=2 0.124, nb=4 0.195, nb=1
 0.771. Cost is roughly **linear in `nb`** while parameters fall as $1/\text{nb}^2$,
 because each block is a small matmul plus an index gather and we are launch-bound.
 Under training: 8.4 → 18.2 → 24.7 → 47.6 → 92.1 s/epoch as $W_{hh}$ parameters fell
-4.19 M → 0.06 M — an 11× slowdown for a 70× parameter reduction.
+4.19 M → 0.033 M — an 11× slowdown for a 128× parameter reduction. (Earlier
+revisions of this line said 0.06 M and 70×, having used nb=16's *total* parameter
+count where the $W_{hh}$ count was meant. $|W_{hh}| = 2 d_h^2 / \text{nb}^2$, so at
+$d_h = 2048$, nb=16 it is 32,768; the run's 63,498 total also carries $W_{xh}$,
+the slot bias and the head.)
 
 The FLOP-saving role of block count needs $d_h$ in the tens of thousands. RCP's
 call: pay this on small problems to keep the code clean.
