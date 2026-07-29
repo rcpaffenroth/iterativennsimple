@@ -478,6 +478,12 @@ def main(directory):
     results = {'models': {},
                '_splits': {s: data[s][1] for s in ('train', 'val', 'test')}}
 
+    # `seed` sets the initialisation draw and the batch order; `split_seed` sets the
+    # data split and is left alone here.  So running several seeds varies training
+    # while every row still sees the identical data -- which is what a replication
+    # has to hold fixed.  One seed stays the default and keeps its bare row name.
+    seeds = cfg['training'].get('seeds') or [cfg['training']['seed']]
+
     for spec in cfg['models']:
         # A per-model embedding config falls back to the dataset-level one, since
         # whether tokens need embedding is a property of the task.
@@ -485,11 +491,15 @@ def main(directory):
         spec.setdefault('embedding', cfg['dataset'].get('embedding'))
 
         lr = spec.get('lr', cfg['training']['lr'])
-        print(f'\n  {spec["name"]}  (lr={lr:g})', flush=True)
-        model = build_model(spec, step_size, num_classes, cfg['training']['seed'])
-        results['models'][spec['name']] = train(model, data, cfg['training'],
-                                                device, lr=lr)
-        results['models'][spec['name']]['lr'] = lr
+        for seed in seeds:
+            name = spec['name'] if len(seeds) == 1 else f'{spec["name"]} seed={seed}'
+            print(f'\n  {name}  (lr={lr:g})', flush=True)
+            model = build_model(spec, step_size, num_classes, seed)
+            results['models'][name] = train(model, data, {**cfg['training'],
+                                                          'seed': seed},
+                                            device, lr=lr)
+            results['models'][name]['lr'] = lr
+            results['models'][name]['seed'] = seed
 
     # Machine-readable alongside the markdown, for replotting without retraining.
     # Written FIRST so that hours of training survive a mistake in the reporting.

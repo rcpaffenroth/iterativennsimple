@@ -26,6 +26,7 @@ which carries a warning about it. Cost comes from `max_points` and the epoch bud
 | `image_wide` | `lra_image` | 1024 | ~1 hour | Width sweep at fixed lr. **Superseded and its conclusion withdrawn** — see its banner. |
 | `image_wide_lr` | `lra_image` | 1024 | ~1.8 hours | Width crossed with lr. Holds the best result so far (GRU h=512, 0.480 test). |
 | `image_monarch` | `lra_image` | 256 | ~1.7 hours | Monarch block count at $d_h$ = 2048. **`step_size: 4`, so a different task** — see its banner. |
+| `epoch_probe` | `lra_image` | 1024 | ~1 hour | Where the loss plateaus at 100 epochs. Not a model comparison; it sets the epoch budget every other run is multiplied by. |
 
 Wall-clock figures are from an RTX 4090 and include per-epoch validation.
 `overnight.log` records `START`/`END` timestamps for the last two, from a runner
@@ -108,7 +109,8 @@ training:
   batch_size: 64
   lr: 0.001
   grad_clip: 1.0         # recurrent models on long sequences need this
-  seed: 0                # same init draw for every model
+  seed: 0                # same init draw and batch order for every model
+  seeds: [0, 1, 2]       # optional; replaces `seed`, running every model once each
   device: cuda
 
 models:
@@ -131,6 +133,15 @@ caveat written into `results.md` by hand is deleted the next time the config run
 one written here survives, and `yaml.safe_dump` also carries it into the config
 block at the foot of the report. Comments in the config are *not* carried — they are
 for whoever edits the config, `notes:` is for whoever reads the results.
+
+`seeds:` varies the initialisation draw and the batch order while leaving
+`split_seed` — and therefore the data — untouched, which is what a replication has
+to hold fixed. Each model then appears once per seed, with ` seed=N` appended to its
+row name and a `seed` field in `results.json`. **The report does not average them.**
+Grouping rows and computing a spread is analysis, and analysis frozen into a
+generator goes stale silently (§1.3 of `PRINCIPLES.md`); the rows are the
+measurement. Note that a spread over 3 seeds is *not* the evaluation sampling error
+— they are different quantities and both matter.
 
 `orthogonal_hh` / `gain` are listed because the code path exists, **not** because
 they work: the hypothesis has failed to transfer at $L = 1024$ twice, at gain 1.2

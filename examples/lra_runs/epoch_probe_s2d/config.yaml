@@ -1,0 +1,79 @@
+# ==========================================================================
+# THIS RUN NEVER COMPLETED.  There is no results.md, results.json or
+# curves.png in this directory, and nothing here has been through
+# write_report.  The process was killed at epoch 75/100 of the SECOND model.
+# Read README.md in this directory before using anything from it, and read
+# the numbers out of the .log rather than from any summary.
+#
+# Re-running this config as-is is a valid thing to do (~2 h) and would
+# produce the missing artefacts.  It was not done because the log already
+# covers 175 of the 200 epochs.
+# ==========================================================================
+#
+# Second budget probe: the S2D setting that actually trains.
+#
+# epoch_probe/ used S2D h=128 lr=1e-3, and that row does not learn AT ALL -- train
+# loss 2.281 -> 2.257 over 100 epochs against ln(10) = 2.3026.  A model that never
+# leaves chance cannot show where it plateaus, so that half of the probe answered
+# nothing about our budget.  Worse, its "best val acc 0.1730 @ 87" is a maximum over
+# 100 noisy draws around a chance-level mean, which arithmetic alone puts at ~0.168.
+#
+# So this probe runs the setting that DID train.  Ranked by how far train loss
+# actually fell in image_wide_lr's 30 epochs, the best of ours was h=2048 at lr=3e-5
+# (delta 0.170, best val 0.215) -- and 3e-5 was the LOWEST rate in that grid, so the
+# optimum sat on the boundary and the grid was in the wrong place.
+#
+# Two rows, two questions, 100 epochs:
+#
+#   lr 3e-5   where does the setting that works plateau?  (sets the sweep's budget)
+#   lr 1e-5   is the boundary optimum real, or does lower still keep helping?
+#
+# ~29 s/epoch each, so ~1.6 h.  Cheap against an 18 h sweep whose design depends on
+# both answers.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/epoch_probe_s2d
+
+notes: |
+  ## WHAT THIS RUN IS FOR
+
+  An **epoch-budget and learning-rate probe**, not a model comparison. Two rows
+  differing only in `lr`, at fixed width.
+
+  Read two things off it: where the train loss stops falling (the budget), and
+  whether 1e-5 beats 3e-5 (whether the lr grid should extend further down).
+
+  **Do not read `best val acc` as a result.** It is a maximum over 100 per-epoch
+  estimates, each with a standard error near 0.012, so it is biased upward by
+  roughly 0.03 for any row that is not clearly learning. Judge learning by the
+  train-loss trajectory, which is not subject to that selection.
+
+dataset:
+  name: lra_image
+  step_size: 1           # seq_len = 1024, the LRA definition
+  train_frac: 0.8
+  val_frac: 0.1
+  split_seed: 0          # same split as every other seq-1024 run
+  embedding: null
+
+training:
+  epochs: 100
+  batch_size: 64
+  lr: 0.00003            # per-model overrides below
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  # The best-training setting found so far, and the bottom of the grid that found it.
+  - name: S2D h=2048 lr=3e-5
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+    lr: 0.00003
+
+  # One step below the boundary. If this trains better, the grid must extend down.
+  - name: S2D h=2048 lr=1e-5
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+    lr: 0.00001

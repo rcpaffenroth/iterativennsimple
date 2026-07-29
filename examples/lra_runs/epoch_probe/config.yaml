@@ -1,0 +1,68 @@
+# Where does the loss actually plateau at seq 1024?
+#
+# Every sweep this project has run was budgeted by guess, and every guess has been
+# too low.  15 epochs was wrong (image_wide_lr's header records why), then 20 was
+# wrong (image_full is undertrained), and at 30 `nn.GRU h=512` was still climbing
+# steeply -- 0.447 val and train loss 1.3585, falling.  So the epoch budget is a
+# free parameter multiplying the cost of every other run, and nobody has measured it.
+#
+# This config measures it.  Two rows, 100 epochs, nothing else varied.
+#
+#   nn.GRU h=512 lr=1e-3     5.2 s/epoch  ->  ~9 min
+#   S2D h=128 lr=1e-3       29.9 s/epoch  ->  ~50 min
+#
+# Both are copied EXACTLY from image_wide_lr/ -- same split_seed, same lr, same
+# batch size, same 8000/1000/1000 split -- so epochs 1-30 must reproduce that run
+# row for row.  That is the check that this probe is measuring the same thing;
+# if those 30 epochs disagree, something else changed and the extension is void.
+#
+# Two rows and not four.  Whether the plateau epoch depends on WIDTH is a separate
+# question, and a real one -- the width sweep compares across widths at fixed
+# epochs, so if wide models plateau later that comparison is confounded too.  It is
+# not answered here.  Do not read this run as licensing a fixed budget across widths.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/epoch_probe
+
+notes: |
+  ## WHAT THIS RUN IS FOR
+
+  This is an **epoch-budget measurement**, not a model comparison. Two rows at two
+  different widths and two different architectures are not comparable to each
+  other; the only quantity being read off is *where each curve stops improving*.
+
+  Epochs 1-30 reproduce `image_wide_lr/` exactly by construction (same
+  `split_seed`, `lr`, `batch_size` and split). If they do not, this run is void.
+
+  **It does not measure whether the plateau epoch depends on width.** Only $d_h$ =
+  512 (GRU) and 128 (ours) were run, confounded with architecture. The width sweep
+  still needs its own check.
+
+dataset:
+  name: lra_image
+  step_size: 1           # seq_len = 1024, the LRA definition
+  train_frac: 0.8
+  val_frac: 0.1
+  split_seed: 0          # same split as image_full / image_wide / image_wide_lr
+  embedding: null
+
+training:
+  epochs: 100            # the point of the run; do not trim
+  batch_size: 64
+  lr: 0.001
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  # The only model on this task that has ever learned much. Cheap: cuDNN.
+  - name: GRU h=512 lr=1e-3
+    type: gru
+    hidden_size: 512
+    lr: 0.001
+
+  # Ours, at the width and lr that image_wide_lr used as its anchor row.
+  - name: S2D h=128 lr=1e-3
+    type: sequential2d
+    hidden_size: 128
+    K: 1
+    lr: 0.001
