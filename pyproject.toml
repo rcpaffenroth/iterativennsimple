@@ -1,6 +1,6 @@
 [project]
 name = "iterativennsimple"
-version = "0.5.0"
+version = "0.4.1"
 description = "A simple version of iterativenn to get people started"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -41,7 +41,8 @@ testpaths = [
 ]
 
 [tool.uv.sources]
-generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", tag = "v0.4.3" }
+#generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", tag = "v0.4.3" }
+generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", branch = "feature/whest_data" }
 
 [tool.uv]
 default-groups = []

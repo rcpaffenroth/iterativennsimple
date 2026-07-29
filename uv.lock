@@ -721,8 +721,8 @@ wheels = [
 
 [[package]]
 name = "generatedata"
-version = "0.4.3"
-source = { git = "https://github.com/rcpaffenroth/generatedata.git?tag=v0.4.3#551ff983a8c05b3dc41feed2c9ef480005a56a46" }
+version = "0.4.4"
+source = { git = "https://github.com/rcpaffenroth/generatedata.git?branch=feature%2Fwhest_data#fd12402d01f254f9a97d07a11bf2ed5089b67f0b" }
 dependencies = [
     { name = "anywidget" },
     { name = "ipykernel" },
@@ -975,7 +975,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1,<9" },
-    { name = "generatedata", git = "https://github.com/rcpaffenroth/generatedata.git?tag=v0.4.3" },
+    { name = "generatedata", git = "https://github.com/rcpaffenroth/generatedata.git?branch=feature%2Fwhest_data" },
     { name = "ipykernel", specifier = ">=6.29,<7" },
     { name = "ipympl", specifier = ">=0.9,<1" },
     { name = "jupyterlab", specifier = ">=4.3,<5" },
