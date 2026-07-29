@@ -1,0 +1,59 @@
+# LRA pathfinder, at the LRA definition.  Binary task, so chance is 0.5 and a model
+# that has learned nothing is unmistakable.
+#
+# `step_size: 1`, and cost comes from `max_points`.  An earlier version used
+# step_size 16, which changes both `seq_len` and `input_size` and therefore the task
+# -- and since this is the only pathfinder config, that meant the project had no LRA
+# pathfinder result at all, only a different task under its name.
+#
+# Every Sequential2DRNN row here uses default initialisation.  An earlier version
+# put `orthogonal_hh: true` on the K=2 and K=4 rows but not on K=1, so K and
+# initialisation moved together and neither could be attributed.  If you want to
+# test initialisation, add a row at MATCHED K.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/pathfinder_smoke
+
+dataset:
+  name: lra_pathfinder
+  step_size: 1           # seq_len = 1024, the LRA definition
+  max_points: 2000       # of 10000 -- the cost lever
+  train_frac: 0.8
+  val_frac: 0.1
+  split_seed: 0
+  embedding: null        # 4 distinct pixel values, but continuous in [0, 1]
+
+training:
+  epochs: 30             # models on this task learn late; see PRINCIPLES.md
+  batch_size: 64
+  lr: 0.001
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  - name: nn.RNN (tanh)
+    type: rnn
+    hidden_size: 128
+
+  - name: nn.LSTM
+    type: lstm
+    hidden_size: 128
+
+  - name: nn.GRU
+    type: gru
+    hidden_size: 128
+
+  - name: Sequential2DRNN K=1
+    type: sequential2d
+    hidden_size: 128
+    K: 1
+
+  - name: Sequential2DRNN K=2
+    type: sequential2d
+    hidden_size: 128
+    K: 2
+
+  - name: Sequential2DRNN K=4
+    type: sequential2d
+    hidden_size: 128
+    K: 4

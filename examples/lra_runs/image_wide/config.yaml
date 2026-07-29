@@ -1,0 +1,78 @@
+# Does hidden width get the model off chance at seq_len 1024?
+#
+# image_full established the baseline: at d_h = 128 nothing in the RNN family
+# except GRU learns, and the five near-chance rows sit inside a 0.13-0.155 band
+# that one seed cannot resolve.  So the comparison there had no signal to compare.
+#
+# Width is the cheapest thing to TRY, because Sequential2DRNN's cost is flat in d_h
+# -- the loop is launch-bound, not compute-bound.  Measured at seq 1024, batch 64:
+# 234 ms/batch at d_h 128, 231 at 512, 225 at 2048.  Cheap to run is not the same as
+# likely to work, and it is certainly not the same as cheap to *train*: the wide
+# models in image_wide_lr/ needed a much smaller learning rate, and nn.GRU h=2048
+# diverged outright at two of them.
+#
+# SUPERSEDED, and its conclusion was WRONG.  This config holds lr fixed at 1e-3
+# across all widths, which is a step-size artefact rather than a capacity result --
+# train loss rose above ln(10) and worsened monotonically with width.  See
+# image_wide_lr/, and the banner in this directory's results.md.
+#
+# Dense W_hh only.  Sparsity is a separate question and confounds this one; see
+# image_monarch/ for that.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/image_wide
+
+dataset:
+  name: lra_image
+  step_size: 1           # seq_len = 1024, the LRA definition
+  train_frac: 0.8
+  val_frac: 0.1
+  split_seed: 0          # identical split to image_full, so rows are comparable
+  embedding: null
+
+training:
+  epochs: 20
+  batch_size: 64
+  lr: 0.001
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  # GRU at three widths.  It was the only model to learn at d_h 128 (0.248), so it
+  # is the reference for whether width helps at all on this task, independent of
+  # our implementation.  These rows are nearly free -- cuDNN, ~1 min each.
+  - name: nn.GRU h=128
+    type: gru
+    hidden_size: 128
+  - name: nn.GRU h=512
+    type: gru
+    hidden_size: 512
+  - name: nn.GRU h=2048
+    type: gru
+    hidden_size: 2048
+
+  # The same width sweep for us.  h=128 repeats image_full as a consistency check
+  # that the split and seed really are reproducible.
+  - name: Sequential2DRNN h=128
+    type: sequential2d
+    hidden_size: 128
+    K: 1
+  - name: Sequential2DRNN h=512
+    type: sequential2d
+    hidden_size: 512
+    K: 1
+  - name: Sequential2DRNN h=2048
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+
+  # The corrected orthogonal hypothesis.  image_full used gain 1.2, tuned at
+  # effective depth 80 in examples/rnn_internal_iterations.py, and it did not
+  # transfer to depth 1024.  Spectral radius exactly 1 is the principled target
+  # when depth is large: no contraction, no explosion.
+  - name: Sequential2DRNN h=512 orth gain=1.0
+    type: sequential2d
+    hidden_size: 512
+    K: 1
+    orthogonal_hh: true
+    gain: 1.0

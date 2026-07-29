@@ -1,0 +1,65 @@
+# LRA image at the real definition: one pixel per timestep, seq_len = 1024.
+#
+# UNDERTRAINED -- 20 epochs is not enough, and this was measured after the run.
+# nn.GRU h=512 in image_wide_lr/ reached 0.159 val at epoch 15, 0.326 at 20 and
+# 0.447 at 30, still climbing.  So every number this config produces is a lower
+# bound taken before the models had finished learning, and image_wide_lr/ supersedes
+# it for anything at seq 1024.  Left at 20 for the record; raise to 30+ before
+# quoting it.
+#
+# Cost.  Sequential2DRNN runs a Python loop and is launch-bound, so its cost is flat
+# in hidden width and linear in sequence length: ~230 ms/batch at seq 1024, batch
+# 64, for any d_h from 128 to 2048.  cuDNN is much faster at small d_h and the gap
+# closes as d_h grows (94x at 128, 2.1x at 2048), so the often-quoted "~100x" is a
+# small-hidden artefact and not a property of the method.  About 30 s/epoch for
+# K=1 here, 60 for K=2.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/image_full
+
+dataset:
+  name: lra_image
+  step_size: 1           # seq_len = 1024, the LRA definition
+  train_frac: 0.8
+  val_frac: 0.1
+  split_seed: 0
+  embedding: null
+
+training:
+  epochs: 20
+  batch_size: 64
+  lr: 0.001              # lower than the smoke run: 1024 steps of BPTT is touchier
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  - name: nn.RNN (tanh)
+    type: rnn
+    hidden_size: 128
+
+  - name: nn.LSTM
+    type: lstm
+    hidden_size: 128
+
+  - name: nn.GRU
+    type: gru
+    hidden_size: 128
+
+  - name: Sequential2DRNN K=1
+    type: sequential2d
+    hidden_size: 128
+    K: 1
+
+  - name: Sequential2DRNN K=1 orth
+    type: sequential2d
+    hidden_size: 128
+    K: 1
+    orthogonal_hh: true
+    gain: 1.2
+
+  - name: Sequential2DRNN K=2 orth
+    type: sequential2d
+    hidden_size: 128
+    K: 2
+    orthogonal_hh: true
+    gain: 1.2

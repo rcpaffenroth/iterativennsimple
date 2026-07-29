@@ -20,7 +20,7 @@ map ticks K times per token (fast, internal).  K = 1 collapses (*) to an
 ordinary RNN, which is why `from_rnn` below can reproduce `torch.nn.RNN`
 exactly.  K > 1 is the interesting case and is the reason this module exists.
 
-See OVERVIEW_RNN_SEQUENTIAL_2D.md for the derivation, the correspondence with
+See tasks/OVERVIEW_RNN_SEQUENTIAL_2D.md for the derivation, the correspondence with
 torch.nn.RNN, and the reasoning behind each design decision.  Section numbers
 in the comments below refer to that document.
 

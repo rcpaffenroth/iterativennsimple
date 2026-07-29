@@ -317,6 +317,68 @@ against.
 with `nn.RNN` — that module has no readout at all, and its `output` *is* the
 hidden sequence.
 
+### 5.5b Input lifting — a proposition, and why it is not implemented
+
+The input's contribution can be hoisted out of the internal loop entirely. This is
+a *theorem about the existing map*, not a variant of it.
+
+> **Proposition (input lifting).** Suppose the input-persistence invariant of §8.6
+> holds — $M_{xx} = I$, $b_x = 0$, $A_x = \mathrm{id}$ — and no other block writes
+> into the $x$-slot. Write $M_{\setminus x}$ for $M$ with the $x$ row and column
+> deleted, and define the **forcing**
+> $$u_t \;=\; \big(W_{xs}\,x_t\big)_{s \neq x}$$
+> the contribution the input makes to each non-input slot. Then for every $K \ge 0$
+> $$\Big[(A \circ b \circ M)^{K} \circ \mathrm{Inject}_{x_t}\, z\Big]_{\setminus x}
+> \;=\; \big(A \circ (b + u_t) \circ M_{\setminus x}\big)^{K} z_{\setminus x}$$
+>
+> *Proof.* Induction on $k$; the base case is trivial. The three hypotheses give
+> $x^{(k)} = x_t$ for every $k$, so the total arriving at a slot $s \neq x$ on
+> iteration $k$ is $\sum_{s' \neq x} W_{s's} z^{(k)}_{s'} + W_{xs} x_t$, whose last
+> term is the constant $(u_t)_s$. One step of each side therefore agrees. $\square$
+
+**Corollary.** $W_{xs}$ need never be applied inside the internal loop; $u_t$ can be
+precomputed for a whole sequence in one batched matmul.
+
+Three things worth noting.
+
+- **The hypothesis is exactly §8.6.** The invariant insisted on there for dynamical
+  reasons — impulse response, gradient path length, well-posedness of
+  $K \to \infty$ — is precisely what licenses this optimisation. It also survives the
+  scalar leak of §8.6: $M_{xx} = \lambda I$ gives $x^{(k)} = \lambda^{k} x_t$ and
+  forcing $\lambda^{k} u_t$, still precomputable. It does **not** survive a general
+  learnable $W_{xx}$.
+- **This is the right form, rather than widening the $x$-slot.** Precomputing
+  $\hat{x}_t = W_{xh} x_t$ and setting $W_{xh} \to I_{d_h}$ also works, but breaks as
+  soon as the input feeds two slots: one identity cannot serve two differently-sized
+  targets, so $W_{xh}$ and $W_{xy}$ would have to become projections $[I\ 0]$ and
+  $[0\ I]$ out of a concatenated slot. The forcing form takes any number of targets
+  by stacking, and is the classical form for a forced discrete system.
+- **What it costs.** $u_t$ is $\Theta(L B d_h)$ where the raw input was
+  $\Theta(L B d_x)$, and $d_x \ll d_h$ is the intended regime (one pixel per step,
+  large hidden). But BPTT already stores $\Theta(L B d_h)$, so this is a
+  constant-factor increase rather than an asymptotic one — 512 MB at $d_h = 2048$,
+  $L = 1024$, $B = 64$.
+
+**Not implemented, deliberately.** Measured on an RTX 4090, $L = 1024$, $B = 64$,
+$d_h = 128$:
+
+| variant | ms / batch |
+| --- | ---: |
+| $W_{xh}$ applied inside the loop, slicing `x[:, t, :]` | 176 |
+| $W_{xh}$ inside, input pre-unbound into a list | 162 |
+| hoisted, slicing `xh[:, t, :]` | **220** |
+| hoisted, forcing pre-unbound into a list | **117** |
+
+The lifting is worth about **30%**, and *only* in combination with pre-unbinding.
+Hoisting on its own is a 25% **pessimisation**, because it trades a tiny
+$(B, d_x) \times (d_x, d_h)$ matmul for 1024 slices of a 33 MB tensor.
+
+Thirty percent does not justify a second code path that must be kept provably
+equivalent to the first — particularly since the gap it narrows shrinks as $d_h$
+grows, and vanishes in the regime this project is aimed at (§9.6). Recorded because
+the proposition is worth knowing, and because it is the first thing a reader will
+propose.
+
 ### 5.6 Construction: the factory pattern
 
 Follow the existing `Sequential2D.from_config` style (`Sequential2D.py:163`). The core module
@@ -697,6 +759,42 @@ run the experiment.
    `MonarchLinear` instead of `torch.nn.Linear`. An RNN with a Monarch $W_{hh}$ behind an
    unchanged outer API is the paper's §8 sparsity study with no new plumbing — this is close
    to free and should be supported from the start.
+
+---
+
+### 9.6 The Python loop is a small-model problem
+
+`Sequential2DRNN` steps a Python loop with a handful of kernel launches per
+timestep, where `torch.nn.RNN` calls a fused cuDNN kernel that runs the whole
+recurrence on-device. The resulting gap is often quoted as ~100x, which is true and
+badly misleading: it is a statement about *small hidden sizes*, not about the
+method. Measured on an RTX 4090, $L = 1024$, $B = 64$, $d_x = 1$:
+
+| $d_h$ | our loop | cuDNN | gap |
+| ---: | ---: | ---: | ---: |
+| 128 | 162 ms | 1.2 ms | 94x |
+| 512 | 164 ms | 21.7 ms | 7.5x |
+| 1024 | 158 ms | 28.5 ms | 5.5x |
+| 2048 | 160 ms | 77.7 ms | 2.1x |
+
+Note our column is **flat** — 158-164 ms regardless of $d_h$ — because the loop is
+launch-bound, not compute-bound. cuDNN's entire advantage is amortising launch
+overhead, so it evaporates once the per-step $d_h^2$ matmul is real work.
+
+> **Flat cost is about wall-clock, not trainability.** Measured later on real
+> training: our s/epoch is flat (29.9 / 29.4 / 29.1 at $d_h$ = 128 / 512 / 2048)
+> while cuDNN GRU goes 5.2 -> 20.5. But over the same sweep `nn.GRU h=2048`
+> diverged to NaN at two learning rates, and *our* wide models needed the learning
+> rate scaled roughly as $1/d_h$ (1e-3 -> 1e-4 -> 3e-5) before width helped at all.
+> Width being free to **run** is not width being free to **train**. Do not read this
+> section as saying large $d_h$ is available for nothing.
+
+The consequence for planning: **the overhead is worst exactly where it matters
+least.** Small-hidden experiments are cheap in absolute terms even at 100x, and the
+large-hidden experiments this project is aimed at — large $h$, large Monarch blocks —
+run at roughly cuDNN speed. Paying the cost to keep the code readable is therefore
+a much easier trade than the headline number suggests. See §5.5b for the one
+optimisation considered and declined.
 
 ---
 

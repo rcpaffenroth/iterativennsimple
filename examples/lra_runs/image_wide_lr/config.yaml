@@ -1,0 +1,98 @@
+# Width sweep with the learning rate confound removed.
+#
+# image_wide/ swept d_h at a single lr = 0.001 and found width made things *worse*
+# for us -- train loss rising past ln(10) = 2.3026 and increasing monotonically with
+# width (2.2773 -> 2.3286 -> 2.4365 at d_h 128/512/2048), with val acc falling
+# 0.128 -> 0.110 -> 0.094.  nn.GRU at d_h 2048 diverged to NaN outright at epoch 7
+# under the same lr.
+#
+# Train loss *above* chance and worsening with width is the signature of too-large
+# steps, not of insufficient capacity: the same lr in a wider model moves further in
+# function space.  So that sweep cannot distinguish "width does not help" from "the
+# learning rate was wrong for the wide models", and its conclusion has to be thrown
+# out rather than reinterpreted.
+#
+# This run crosses d_h with lr instead of holding lr fixed.  It is affordable for
+# exactly the reason in Sec. 9.6 of tasks/OVERVIEW_RNN_SEQUENTIAL_2D.md: our cost is
+# flat in d_h (225-234 ms/batch from 128 to 2048), so nine of our rows cost what
+# nine narrow rows would.
+#
+# Divergence is now detected and reported: a model that goes non-finite is stopped
+# and its row is flagged, rather than quietly contributing its best pre-divergence
+# epoch as if that were a result.
+#
+# Epoch budget -- do not trim this.  An earlier version used 15 epochs to pay for
+# the extra lr axis, and that was a mistake of the same kind image_wide made.
+# nn.GRU h=512 in image_wide sat at 0.159 val acc at epoch 15 and reached 0.326 by
+# epoch 20, doing essentially all of its learning in epochs 16-20 as the loss fell
+# 2.2174 -> 1.8518.  Truncating at 15 reports every row as near-chance and compares
+# models before any of them has begun to learn.  At epoch 20 it was still climbing
+# steeply with no plateau, so 30 is a floor rather than a generous choice.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/image_wide_lr
+
+dataset:
+  name: lra_image
+  step_size: 1           # seq_len = 1024
+  train_frac: 0.8
+  val_frac: 0.1
+  split_seed: 0          # same split as image_full and image_wide
+  embedding: null
+
+training:
+  epochs: 30             # see the epoch-budget note above
+  batch_size: 64
+  lr: 0.001              # per-model `lr` below overrides this
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  # --- GRU reference, including a retry of the row that diverged --------------
+  - name: GRU h=512 lr=1e-3
+    type: gru
+    hidden_size: 512
+    lr: 0.001
+  - name: GRU h=2048 lr=3e-4
+    type: gru
+    hidden_size: 2048
+    lr: 0.0003
+  - name: GRU h=2048 lr=1e-4
+    type: gru
+    hidden_size: 2048
+    lr: 0.0001
+
+  # --- ours: d_h crossed with lr ---------------------------------------------
+  # d_h 128 at the baseline lr is the anchor; everything else is relative to it.
+  - name: S2D h=128 lr=1e-3
+    type: sequential2d
+    hidden_size: 128
+    K: 1
+    lr: 0.001
+
+  - name: S2D h=512 lr=3e-4
+    type: sequential2d
+    hidden_size: 512
+    K: 1
+    lr: 0.0003
+  - name: S2D h=512 lr=1e-4
+    type: sequential2d
+    hidden_size: 512
+    K: 1
+    lr: 0.0001
+
+  - name: S2D h=2048 lr=3e-4
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+    lr: 0.0003
+  - name: S2D h=2048 lr=1e-4
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+    lr: 0.0001
+  - name: S2D h=2048 lr=3e-5
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+    lr: 0.00003

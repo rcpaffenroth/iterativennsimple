@@ -1,0 +1,61 @@
+# LRA ListOps: hierarchical expression evaluation, 17-token vocabulary.
+#
+# Discrete tokens, so this run exercises the embedding path.  Two consequences:
+#
+#   * step_size must be 1 -- an embedding consumes one integer per timestep, so
+#     patchifying is not available here.  The script asserts this.  That is a
+#     happy accident: step_size changes the task (it sets `input_size` too), so
+#     being forced to 1 keeps this config comparable to anything else at 1.
+#   * the sequence is therefore the full 2048, which is ~32x the cost per epoch of
+#     the patchified image/pathfinder smoke runs.
+#
+# So this one is made cheap by `max_points` instead: fewer sequences, same task.
+# Truncating the sequence would be cheaper again, but on ListOps it would change
+# the answer -- the label depends on the whole expression -- so it is not offered.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/listops_smoke
+
+dataset:
+  name: lra_listops
+  step_size: 1           # seq_len = 2048; forced by the embedding
+  max_points: 2000       # of 10000; statistical power traded for wall-clock
+  train_frac: 0.8
+  val_frac: 0.1
+  split_seed: 0
+  embedding:
+    vocab_size: 17       # PAD, digits 0-9, MIN/MAX/MEDIAN/SUM_MOD, '[', ']'
+    dim: 32
+
+training:
+  epochs: 30             # models learn late; 5 was far below where anything starts
+  batch_size: 32         # sequences are 2048 long; keep activations modest
+  lr: 0.003
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  - name: nn.RNN (tanh)
+    type: rnn
+    hidden_size: 128
+
+  - name: nn.LSTM
+    type: lstm
+    hidden_size: 128
+
+  - name: nn.GRU
+    type: gru
+    hidden_size: 128
+
+  - name: Sequential2DRNN K=1
+    type: sequential2d
+    hidden_size: 128
+    K: 1
+
+  # Default initialisation, matching the K=1 row.  An earlier version put
+  # `orthogonal_hh: true` here and not on K=1, so K and initialisation moved
+  # together and neither could be attributed.
+  - name: Sequential2DRNN K=2
+    type: sequential2d
+    hidden_size: 128
+    K: 2

@@ -13,12 +13,24 @@ the number of internal iterations K is free.  K = 1 is an ordinary RNN.  K > 1
 lets the network run its own dynamics several steps per input token -- a fast
 internal timescale under a slow external one.  Does that extra computation help?
 
-The short answer, on a task that needs memory: no, and at first it looks
-catastrophic.  The interesting part is *why*, and that the reason is fixable.
-The script walks the whole loop -- measure, diagnose, fix, re-measure -- because
-that loop is more useful to copy than any particular number in it.
+On this task, at this size, K > 1 did worse, and the script walks measure ->
+diagnose -> fix -> re-measure.  Read it for that loop rather than for its numbers.
 
-See OVERVIEW_RNN_SEQUENTIAL_2D.md for the mathematics.
+READ THIS BEFORE QUOTING ANYTHING BELOW.  Every result here is one seed on a
+synthetic task with seq_len 20 and hidden 24, and the "fix" -- orthogonal
+initialisation of W_hh with gain > 1 -- has since FAILED TO TRANSFER twice, at
+gain 1.2 and at gain 1.0, on LRA image at seq_len 1024 (see
+examples/lra_runs/image_full/ and image_wide/, and Sec. 10.3 of the overview).
+
+So the memory-horizon argument below should be read as a hypothesis that holds at
+short sequence length and at initialisation, not as a diagnosis with a known
+remedy.  The parts of this script that are solid are the *deterministic*
+measurements: the ||d h_t / d x_0|| table, which is computed by autograd at
+initialisation and does not depend on training or on a seed.  The accuracies are
+single-seed and should not be ranked against each other.
+
+See tasks/OVERVIEW_RNN_SEQUENTIAL_2D.md for the mathematics, and PRINCIPLES.md for
+why this warning is here rather than in a footnote.
 """
 
 import time

@@ -82,7 +82,7 @@ Naming is **source-first**: `W_ab` maps slot `a` to slot `b`. Any module carryin
 | **`notebooks/7-rcp-RNN-as-Sequential2D.ipynb`** | **Start here.** Builds the block map by hand, checks it against `torch.nn.RNN`, then turns $K$ up and watches what happens. Runs in seconds. |
 | **`notebooks/8-rcp-fixed-points-and-bistability.ipynb`** | The dynamical-systems view, with `hidden_size = 1` so everything can be drawn: cobwebs, bistability, and an honest saddle-node fold. Where memory-as-attractor-identity comes from. Also runs in seconds. |
 | `examples/rnn_internal_iterations.py` | Trains at several $K$ on a task that needs memory. A worked negative result: $K > 1$ collapses, the reason is measured, the fix is applied, the comparison is redone. Takes a couple of minutes. |
-| `OVERVIEW_RNN_SEQUENTIAL_2D.md` | Every design decision and why, including the ones deliberately not taken. Read before changing anything. |
+| `tasks/OVERVIEW_RNN_SEQUENTIAL_2D.md` | Every design decision and why, including the ones deliberately not taken. Read before changing anything. |
 | `tests/test_Sequential2DRNN.py` | The invariants — mostly the ones that fail silently. |
 | [arXiv:2404.00880](https://arxiv.org/abs/2404.00880) | Hershey, Paffenroth, Pathak & Tavener. The mathematics this implements. |
 
@@ -156,5 +156,5 @@ reasons in the overview.
 
 Implemented and tested: the `torch.nn.RNN` equivalence, the general three-slot
 map, the observation map, `PackedSequence`, arbitrary and nested block types, and
-$K > 1$. Deferred work is in `TODO_Sequential2DRNN.md`; open design questions are
+$K > 1$. Deferred work is in `tasks/TODO_Sequential2DRNN.md`; open design questions are
 in §10 of the overview.

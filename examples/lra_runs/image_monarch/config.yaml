@@ -1,0 +1,117 @@
+# Does Monarch sparsity in W_hh act as a regularizer?
+#
+# Block count plays two roles.  The first -- more blocks means fewer unknowns and,
+# at sufficient scale, less compute -- does NOT hold in this implementation and is
+# measured, not assumed.  At d_h = 2048, seq 1024, batch 64, per-call cost:
+#
+#     dense        0.024 ms      4.19 M params
+#     monarch nb=2  0.124 ms     2.10 M
+#     monarch nb=4  0.195 ms     0.52 M
+#     monarch nb=16 0.771 ms     0.03 M
+#
+# Cost is roughly *linear* in nb while FLOPs fall as 1/nb^2, because each block is
+# a separate small matmul plus an index gather and we are launch-bound rather than
+# FLOP-bound.  Even nb=4 at d_h=2048 is a 512x512 matmul -- still trivial work.
+# The crossover where fewer FLOPs wins needs d_h in the tens of thousands.
+#
+# The second role -- sparsity as an implicit regularizer, in the spirit of dropout
+# -- is untouched by that and is what this run tests.  Hidden width is held fixed
+# at 2048 and only nb varies, so any difference is attributable to the sparsity
+# pattern rather than to capacity.
+#
+# Why step_size 4 (seq_len 256) rather than the full 1024?  Not only cost.  A
+# regularizer can only be *measured* on a model that is actually learning, and
+# preferably overfitting.  At seq 1024 / d_h 128, image_full showed everything
+# except GRU pinned at chance -- and sparsity cannot help or hurt measurably when
+# nothing learns.  At seq 256 with d_h 2048 there are 4.19 M parameters in dense
+# W_hh against 8000 training sequences, which should overfit.  That is the setting
+# where a regularizer has something to do.
+#
+# Learning rate.  image_wide showed d_h = 2048 at lr = 1e-3 reaching train loss
+# 2.4365 -- above chance -- so that setting is unusable here and the default is
+# 1e-4.  Since the right value is not yet known (image_wide_lr answers that), the
+# dense reference is run at two rates to bracket it: if 3e-4 beats 1e-4 the sweep
+# undershot and should be repeated higher, and the curves will show which.
+#
+# 30 epochs, not 20: on this task the models learn late.  See the epoch-budget
+# note in image_wide_lr/config.yaml.
+#
+# STEP_SIZE WARNING.  This config uses step_size 4 while image_full/, image_wide/
+# and image_wide_lr/ use 1.  step_size sets both `seq_len` and `input_size`, so this
+# is a DIFFERENT TASK with a 4x wider input -- not a shorter version of the same one.
+# Nothing here may be placed on the same axis as a step_size 1 run.  Re-run at
+# step_size 1, using `max_points` for cost, before drawing any conclusion meant to
+# apply to LRA image.  The value 4 was chosen arbitrarily.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/image_monarch
+
+dataset:
+  name: lra_image
+  step_size: 4           # seq_len = 1024 / 4 = 256
+  train_frac: 0.8
+  val_frac: 0.1
+  split_seed: 0
+  embedding: null
+
+training:
+  epochs: 30
+  batch_size: 64
+  lr: 0.0001            # NOT 1e-3: d_h=2048 was unstable there, see below
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  # Reference: is the dense model overfitting?  If train loss falls well below
+  # validation loss, a regularizer has room to work.  If not, this whole run is
+  # measuring nothing and the curves will say so.
+  - name: dense W_hh (4.19M in W_hh) lr=1e-4
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+
+  # Bracket: is 1e-4 too low?  Sparse rows all use 1e-4, so if this beats it the
+  # whole sweep needs redoing at the higher rate.
+  - name: dense W_hh (4.19M in W_hh) lr=3e-4
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+    lr: 0.0003
+
+  - name: monarch nb=2 (2.10M in W_hh)
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+    W_hh: monarch
+    num_blocks: 2
+
+  - name: monarch nb=4 (0.52M in W_hh)
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+    W_hh: monarch
+    num_blocks: 4
+
+  - name: monarch nb=8 (0.13M in W_hh)
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+    W_hh: monarch
+    num_blocks: 8
+
+  - name: monarch nb=16 (0.03M in W_hh)
+    type: sequential2d
+    hidden_size: 2048
+    K: 1
+    W_hh: monarch
+    num_blocks: 16
+
+  # A dense control matched to nb=4 on W_hh, to separate "sparse and wide" from
+  # "dense and narrow".  724^2 = 524,176 against nb=4's 2*512^2 = 524,288.
+  # NOTE the match is on W_hh only: totals are 535,046 here against 555,018 for
+  # nb=4, because h=724 also gets a smaller head and W_xh.  The control therefore
+  # carries 3.6% FEWER parameters overall.
+  - name: dense h=724 control (0.52M in W_hh)
+    type: sequential2d
+    hidden_size: 724
+    K: 1
