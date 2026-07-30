@@ -1,0 +1,81 @@
+# The easy end of a real image task: sequential MNIST in the LRA Image format.
+#
+# `lra_image` (CIFAR-10, seq_len 1024) is the benchmark and nothing has passed 0.48
+# on it.  `lra_image_mnist` is the same pipeline on MNIST at its native 28x28, so
+# seq_len is 784 and the classes are far more separable.  It is here to answer "can
+# this core learn a *real* long-sequence image task at all" in minutes rather than
+# an hour -- one step up from `toy_bw_smoke`, still not a benchmark.
+#
+# `generatedata` bakes only 1000 rows, so the splits are 800 / 100 / 100 and the
+# test column is quantised to 0.01 with a standard error near 0.05.  Read the
+# ordering of the rows, never the third decimal place.
+#
+# EPOCHS ARE THE WHOLE STORY HERE, and 200 is not padding.  800 rows is 13 updates
+# per epoch, so an epoch on this dataset is worth a hundredth of an epoch on
+# `image_full`.  Measured: at 30 epochs every row including GRU sits at chance, which
+# says nothing about any core; nn.GRU first clears chance around epoch 60 and reaches
+# ~0.86 by 100-200.  A first draft of this config used 30 epochs and would have
+# reported "nothing learns MNIST" -- the same mistake `epoch_probe/` was built to
+# stop being made on `lra_image`.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/mnist_smoke
+
+notes: |
+  ## NOT A BENCHMARK, AND THE SPLITS ARE TINY
+
+  `lra_image_mnist` is not part of Long Range Arena; it is the easy counterpart of
+  `lra_image`, and its numbers belong in no table alongside it — different dataset,
+  different sequence length (784 against 1024).
+
+  The dataset holds 1000 rows, so validation and test are 100 rows each. Accuracy is
+  therefore quantised to 0.01 with a standard error near 0.05: a 0.03 gap between two
+  rows here is noise.
+
+  "Easy" means *solvable*, not easy for every core. With 800 training rows and 784
+  timesteps, `nn.GRU` reaches ~0.86 while `nn.RNN` and `nn.LSTM` stay at chance for
+  the whole 200 epochs. A row at 0.11 here is not proof that its core is broken —
+  `toy_bw_smoke` is the run that answers that question, and it is the one to read
+  first when a row here is flat.
+
+dataset:
+  name: lra_image_mnist
+  step_size: 1           # seq_len = 784, one pixel per timestep (the LRA definition)
+  max_points: null       # all 1000 rows -- the dataset is already small
+  train_frac: 0.8
+  val_frac: 0.1          # remainder is test
+  split_seed: 0
+  embedding: null        # pixels are continuous in [0, 1]; nothing to embed
+  local: true            # not in the published snapshot; read a checkout instead
+  data_dir: ../generatedata/data/processed   # relative to the directory you run from;
+                         # needs generatedata's data_dir fix -- see ../README.md
+
+training:
+  epochs: 200            # measured, not guessed; see the note above
+  batch_size: 64
+  lr: 0.001
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  - name: nn.RNN
+    type: rnn
+    hidden_size: 128
+
+  - name: nn.LSTM
+    type: lstm
+    hidden_size: 128
+
+  - name: nn.GRU
+    type: gru
+    hidden_size: 128
+
+  - name: Sequential2DRNN K=1
+    type: sequential2d
+    hidden_size: 128
+    K: 1
+
+  - name: Sequential2DRNN K=2
+    type: sequential2d
+    hidden_size: 128
+    K: 2

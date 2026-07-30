@@ -1,0 +1,60 @@
+# Is the *model* working?  That is all this config is for.
+#
+# `image_smoke` answers "do the shapes line up"; it cannot answer "does this model
+# learn", because 1000 rows of CIFAR for 3 epochs learns nothing whether the model
+# is sound or silently broken.  `lra_toy_bw` closes that gap: 8x8 images that are
+# uniformly dark (level 0.1) or uniformly bright (level 0.9) under noise of scale
+# 0.05, so the classes are 16 per-pixel standard deviations apart.  Any working
+# recurrent classifier reaches ~1.0.  A row that sits at 0.5 here is a broken model
+# or a broken training loop, and the finding is unambiguous because the task cannot
+# be blamed.
+#
+# Not a benchmark.  Never put a number from this directory in a comparison table.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/toy_bw_smoke
+
+notes: |
+  ## NOT A BENCHMARK
+
+  `lra_toy_bw` is trivially separable by construction — two pixel levels 16 standard
+  deviations apart. Accuracy near 1.0 means "this model is not broken", nothing more,
+  and the ordering of the rows carries no information about the architectures.
+
+dataset:
+  name: lra_toy_bw
+  step_size: 1           # seq_len = 64, one pixel per timestep
+  max_points: null       # all 1000 rows; the whole run is seconds
+  train_frac: 0.8
+  val_frac: 0.1          # remainder is test
+  split_seed: 0
+  embedding: null        # pixels are continuous in [0, 1]; nothing to embed
+  local: true            # not in the published snapshot; read a checkout instead
+  data_dir: ../generatedata/data/processed   # relative to the directory you run from;
+                         # needs generatedata's data_dir fix -- see ../README.md
+
+training:
+  epochs: 10             # separable in the first epoch or two; 10 shows the plateau
+  batch_size: 64
+  lr: 0.001
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  - name: nn.RNN
+    type: rnn
+    hidden_size: 32
+
+  - name: nn.LSTM
+    type: lstm
+    hidden_size: 32
+
+  - name: Sequential2DRNN K=1
+    type: sequential2d
+    hidden_size: 32
+    K: 1
+
+  - name: Sequential2DRNN K=2
+    type: sequential2d
+    hidden_size: 32
+    K: 2

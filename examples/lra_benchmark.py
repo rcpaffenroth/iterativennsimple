@@ -7,6 +7,14 @@ Usage:
 The directory must contain `config.yaml`.  Results are written back into the same
 directory as `results.md` and `curves.png`, so a config and its output stay paired.
 
+Besides the five benchmark tasks, `generatedata` ships two datasets in the same
+format that are *not* benchmarks: `lra_image_mnist` and `lra_toy_bw`, run by
+`lra_runs/mnist_smoke` and `lra_runs/toy_bw_smoke`.  They exist because every real
+LRA task is slow, hard, or both, which makes them useless for telling "the model is
+broken" apart from "the task is hard".  A model that cannot separate `lra_toy_bw`
+(two classes 16 per-pixel standard deviations apart) is broken.  Neither is in the
+published data snapshot, so both need `local: true` -- see `load_task`.
+
 Every model is the same three pieces -- optional embedding, recurrent core,
 linear head on the final hidden state -- with *only the core* differing.  That is
 the point: any difference in the table is attributable to the recurrence and not
@@ -74,6 +82,16 @@ def load_task(cfg):
     values patchify, which changes the task rather than making it cheaper: they set
     `input_size = step_size` as well.  Use `max_points` below for cost.
 
+    `local` / `data_dir` choose where the rows come from, and are handed to
+    `load_data_as_sequence` unchanged.  The five benchmark tasks are in the published
+    `generatedata` snapshot and load over HTTP with `local` false, which is the
+    default.  The two non-benchmark tasks -- `lra_image_mnist` (MNIST, seq_len 784,
+    10 classes) and `lra_toy_bw` (8x8 dark-or-bright, seq_len 64, 2 classes) -- are
+    not in that snapshot, so they need `local: true` and a `data_dir` pointing at a
+    `generatedata` checkout's `data/processed`.  `data_dir` is only honoured by
+    `generatedata` v0.4.4 and later; see "Datasets outside the snapshot" in
+    `lra_runs/README.md` for what to do with an older one.
+
     Returns the three splits, the per-timestep shape, and `num_classes` counted over
     *all* rows.  Counting on the train split alone would build too small a head if
     the last class happened not to be drawn into it.
@@ -86,7 +104,9 @@ def load_task(cfg):
         f'{name}: embedding needs one token per timestep, so step_size must be 1, '
         f'not {step_size}.  Patchifying only makes sense for continuous inputs.')
 
-    X, Y = load_data_as_sequence(name, step_size=step_size, label_every_step=False)
+    X, Y = load_data_as_sequence(name, step_size=step_size, label_every_step=False,
+                                 local=cfg.get('local', False),
+                                 data_dir=cfg.get('data_dir'))
 
     X = torch.from_numpy(np.asarray(X, dtype=np.float32))   # (N, seq_len, step_size)
     labels = torch.from_numpy(np.asarray(Y)).argmax(dim=1)  # (N,) class indices

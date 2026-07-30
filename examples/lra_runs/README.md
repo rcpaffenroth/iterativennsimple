@@ -12,6 +12,9 @@ Data comes from the `generatedata` library pinned in `pyproject.toml`, fetched f
 its standard HTTP location. Nothing is cached to disk; each run re-downloads (a
 second or two) and shares one copy across all models in that run.
 
+`lra_image_mnist` and `lra_toy_bw` are the exception — see "Datasets outside the
+snapshot" below.
+
 ## The runs
 
 Every config is at `step_size: 1` — the LRA definition — except `image_monarch`,
@@ -19,6 +22,8 @@ which carries a warning about it. Cost comes from `max_points` and the epoch bud
 
 | directory | dataset | seq_len | cost | what it is for |
 | --- | --- | ---: | --- | --- |
+| `toy_bw_smoke` | `lra_toy_bw` | 64 | seconds | Dark-or-bright 8×8 images, separable by construction. "Does this **model** learn", which `image_smoke` cannot answer. **Not a benchmark.** |
+| `mnist_smoke` | `lra_image_mnist` | 784 | ~4 min | Sequential MNIST — a real image task at the easy end. 100-row test split, so the third decimal is noise. **Not a benchmark.** |
 | `image_smoke` | `lra_image` | 1024 | ~2 min | 1000 rows, 3 epochs. "Does the pipeline run", never accuracy. The one to run while iterating. |
 | `pathfinder_smoke` | `lra_pathfinder` | 1024 | ~1 hour | Binary, so chance is 0.5 and "learned nothing" is unmistakable. **Not yet run.** |
 | `listops_smoke` | `lra_listops` | 2048 | ~2 hours | Exercises the embedding path. Expensive; see below. **Not yet run.** |
@@ -68,6 +73,36 @@ only in combination with pre-unbinding; done naively it is a 25% *pessimisation*
 See §5.5b of `tasks/OVERVIEW_RNN_SEQUENTIAL_2D.md` for the proposition and the
 numbers.
 
+## Datasets outside the snapshot
+
+`lra_image_mnist` and `lra_toy_bw` are not in the published snapshot at
+`generatedata.config.DATA_URL` — `data_names(local=False)` lists only the five
+benchmark tasks — so `local: true` is mandatory for them and their rows are read from
+a `generatedata` checkout instead of over HTTP.
+
+`local: true` on its own reads the *package-relative* `data/processed` — which does not
+exist when `generatedata` is installed the way `pyproject.toml` installs it, as a git
+checkout copied into `site-packages`. So both configs also set `data_dir`, pointing at
+the checkout that actually holds the baked data:
+
+```yaml
+  local: true
+  data_dir: ../generatedata/data/processed   # resolved from the directory you run in
+```
+
+**`data_dir` requires a `generatedata` new enough to respect it.** Until v0.4.4 its
+`load_data` validated the dataset name against `data_names(local=local)`, which ignores
+`data_dir` and reads the package-relative directory, so it raised `FileNotFoundError`
+before `data_dir` was ever consulted. If the installed copy predates that fix, either
+update it, or make the checkout the imported package for one run:
+
+```bash
+PYTHONPATH=../generatedata uv run python examples/lra_benchmark.py examples/lra_runs/toy_bw_smoke
+```
+
+All of this goes away if a snapshot containing the two datasets is ever published at
+`DATA_URL`: `local` goes back to false and `data_dir` back to null.
+
 ## Making an expensive dataset cheap
 
 Two knobs, and they are not equivalent:
@@ -97,12 +132,15 @@ notes: |                 # optional; emitted verbatim above the results table
 
 dataset:
   name: lra_image        # lra_image | lra_listops | lra_pathfinder | lra_text | lra_pathx
+                         # not benchmarks: lra_image_mnist | lra_toy_bw (need `local`)
   step_size: 1           # features per timestep; changes the TASK, not the cost
   max_points: null       # row subsample -- this is the cost lever
   train_frac: 0.8
   val_frac: 0.1          # remainder is test
   split_seed: 0          # every model in a run sees the identical split
   embedding: null        # or {vocab_size: 17, dim: 32} for token tasks
+  local: false           # true reads a checkout instead of the published snapshot
+  data_dir: null         # where that checkout's data/processed is, when local
 
 training:
   epochs: 30             # models on these tasks learn late; 15 is far too few

@@ -39,7 +39,7 @@ notes: |
 
 dataset:
   name: lra_image
-  step_size: 1           # seq_len = 1024, the LRA definition
+  step_size: 1            # seq_len = 1024, the LRA definition
   train_frac: 0.8
   val_frac: 0.1
   split_seed: 0

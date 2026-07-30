@@ -1,0 +1,45 @@
+# Does the code run?  That is all this config is for.
+#
+# `step_size: 1` -- the LRA definition -- deliberately, even though it is slower.
+# step_size sets BOTH `seq_len = 1024 / step_size` AND `input_size = step_size`, so
+# changing it produces a different task with a different input width, not a cheap
+# preview of the same one.  An earlier version of this file used step_size 16, which
+# made its numbers incomparable with image_full/ and image_wide_lr/ while looking
+# like a preview of them.
+#
+# Cost comes from `max_points` instead, which drops rows and so costs only
+# statistical power, leaving the task itself intact.  With 1000 points and 3 epochs
+# nothing will learn -- that is fine and expected.  Read this run for "the pipeline
+# executes and the shapes line up", never for accuracy.
+#
+#   uv run python examples/lra_benchmark.py examples/lra_runs/image_smoke
+
+dataset:
+  name: lra_toy_bw
+  step_size: 128           # seq_len = 1024, the LRA definition
+  max_points: 1000       # of 10000 -- this is the cost lever, not step_size
+  train_frac: 0.8
+  val_frac: 0.1          # remainder is test
+  split_seed: 0
+  embedding: null        # pixels are continuous in [0, 1]; nothing to embed
+
+training:
+  epochs: 100              # far below where learning starts; see the note above
+  batch_size: 128
+  lr: 0.001
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  - name: nn.LSTM
+    type: lstm
+    hidden_size: 128
+
+  - name: Sequential2DRNN K=2 Monarch W_hh
+    type: sequential2d
+    hidden_size: 128
+    K: 2
+    W_hh: monarch
+    num_blocks: 8
+    activation: relu
