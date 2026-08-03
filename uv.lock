@@ -796,7 +796,7 @@ wheels = [
 [[package]]
 name = "generatedata"
 version = "0.4.4"
-source = { git = "https://github.com/rcpaffenroth/generatedata.git?branch=feature%2Fwhest_data#2937fc0bca1b173f1df09640d1f0e23eabab942f" }
+source = { git = "https://github.com/rcpaffenroth/generatedata.git?branch=feature%2Fwhest_data#b71b496f64dbdcf501c070bf6c8eac643dac3427" }
 dependencies = [
     { name = "anywidget" },
     { name = "ipykernel" },

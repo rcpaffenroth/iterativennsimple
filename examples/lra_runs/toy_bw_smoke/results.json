@@ -38,7 +38,7 @@
         1.0
       ]
     },
-    "train_seconds": 0.4573650360107422,
+    "train_seconds": 0.4415318965911865,
     "best_val_acc": 1.0,
     "best_epoch": 1,
     "test_acc": 1.0,
@@ -87,7 +87,7 @@
         1.0
       ]
     },
-    "train_seconds": 0.15216398239135742,
+    "train_seconds": 0.18579554557800293,
     "best_val_acc": 1.0,
     "best_epoch": 3,
     "test_acc": 1.0,
@@ -136,7 +136,7 @@
         1.0
       ]
     },
-    "train_seconds": 2.4134280681610107,
+    "train_seconds": 1.8373217582702637,
     "best_val_acc": 1.0,
     "best_epoch": 3,
     "test_acc": 1.0,
@@ -185,7 +185,7 @@
         1.0
       ]
     },
-    "train_seconds": 4.3349268436431885,
+    "train_seconds": 3.3817508220672607,
     "best_val_acc": 1.0,
     "best_epoch": 3,
     "test_acc": 1.0,

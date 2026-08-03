@@ -33,7 +33,7 @@ One seed. Validation and test splits are 100 and 100 rows, so the standard error
 | nn.RNN | 1,186 | 0.001 | 1.0000 | 1.0000 | 1 | 0 s | 0.0 |
 | nn.LSTM | 4,546 | 0.001 | 1.0000 | 1.0000 | 3 | 0 s | 0.0 |
 | Sequential2DRNN K=1 | 1,154 | 0.001 | 1.0000 | 1.0000 | 3 | 2 s | 0.2 |
-| Sequential2DRNN K=2 | 1,154 | 0.001 | 1.0000 | 1.0000 | 3 | 4 s | 0.4 |
+| Sequential2DRNN K=2 | 1,154 | 0.001 | 1.0000 | 1.0000 | 3 | 3 s | 0.3 |
 
 ## Per-epoch curves
 
