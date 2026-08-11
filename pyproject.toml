@@ -42,7 +42,7 @@ testpaths = [
 
 [tool.uv.sources]
 #generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", tag = "v0.4.3" }
-generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", branch = "feature/whest_data" }
+generatedata = { git = "https://github.com/rcpaffenroth/generatedata.git", branch = "feature/huggingface_backend" }
 
 [tool.uv]
 default-groups = []
