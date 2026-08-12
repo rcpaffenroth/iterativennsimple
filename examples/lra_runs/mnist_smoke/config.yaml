@@ -39,7 +39,7 @@ notes: |
 
 dataset:
   name: lra_image_mnist
-  step_size: 1           # seq_len = 784, one pixel per timestep (the LRA definition)
+  step_size: 28          # seq_len = 784, one pixel per timestep (the LRA definition)
   max_points: null       # all 1000 rows -- the dataset is already small
   train_frac: 0.8
   val_frac: 0.1          # remainder is test

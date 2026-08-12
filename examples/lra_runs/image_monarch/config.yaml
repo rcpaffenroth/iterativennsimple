@@ -1,18 +1,25 @@
 # Does Monarch sparsity in W_hh act as a regularizer?
 #
-# Block count plays two roles.  The first -- more blocks means fewer unknowns and,
-# at sufficient scale, less compute -- does NOT hold in this implementation and is
-# measured, not assumed.  At d_h = 2048, seq 1024, batch 64, per-call cost:
+# THIS RUN'S RESULT IS WITHDRAWN.  DO NOT RE-RUN THIS CONFIG AS WRITTEN.
 #
-#     dense        0.024 ms      4.19 M params
-#     monarch nb=2  0.124 ms     2.10 M
-#     monarch nb=4  0.195 ms     0.52 M
-#     monarch nb=16 0.771 ms     0.03 M
+# Every row with nb a perfect power (4, 8, 16) was built on MonarchLinear's
+# *factored* path, and dense and nb=2 were not.  So nb moved three things at once:
+# the sparsity of S, whether the blocks were independent or weight-tied products,
+# and the initialisation gain of W_hh.  Measured at d_h = 2048, sigma_max of
+# W_hh at init was 0.87 / 0.60 / 0.42 for nb = 4 / 8 / 16 against dense's 1.15 --
+# strict contractions in every direction, so those models could not carry the
+# hidden state across even one timestep, let alone 256.  That alone explains the
+# ranking this run reported.  See RESEARCH_LOG.md sections 2.3 and 3.3.
 #
-# Cost is roughly *linear* in nb while FLOPs fall as 1/nb^2, because each block is
-# a separate small matmul plus an index gather and we are launch-bound rather than
-# FLOP-bound.  Even nb=4 at d_h=2048 is a 512x512 matmul -- still trivial work.
-# The crossover where fewer FLOPs wins needs d_h in the tens of thousands.
+# `MonarchLinear` now takes `use_factorization` and `examples/lra_benchmark.py`
+# fixes it False, so a re-run today would build a different (and correct) set of
+# models from the same file -- which is why the parameter counts in the row names
+# below are also wrong now: nb=4 is 1.05 M, not 0.52 M.
+#
+# The cost table that used to head this file is superseded too.  It read 0.024 /
+# 0.124 / 0.195 / 0.771 ms for dense / nb=2 / nb=4 / nb=16 and concluded cost is
+# linear in nb.  With independent blocks the same measurement is 0.022 / 0.112 /
+# 0.113 / 0.118 / 0.125 ms -- flat.  Monarch costs ~5x dense at any nb.
 #
 # The second role -- sparsity as an implicit regularizer, in the spirit of dropout
 # -- is untouched by that and is what this run tests.  Hidden width is held fixed
@@ -46,11 +53,24 @@
 # Emitted verbatim into results.md above the table on every run.  Comments up top
 # are dropped by yaml.safe_dump; this is not.
 notes: |
-  ## SCOPE OF THESE NUMBERS
+  ## WITHDRAWN — THE BLOCK-COUNT RANKING HERE IS CONFOUNDED
+
+  The `nb` = 4, 8, 16 rows ran on `MonarchLinear`'s **factored** path and the
+  `dense` and `nb=2` rows did not, so `nb` moved three things together: the
+  sparsity of $S$, whether the blocks were independent or weight-tied products,
+  and the initialisation gain of $W_{hh}$. At $d_h = 2048$ the factored rows had
+  $\sigma_{\max}$ = 0.87 / 0.60 / 0.42 against dense's 1.15 — contractions in
+  every direction at initialisation, so they could not carry the hidden state
+  across one step. That accounts for the ranking with no sparsity mechanism
+  needed. See `RESEARCH_LOG.md` §2.3 and §3.3. The row names' parameter counts are
+  factored counts and are wrong for the current code: `nb=4` is 1.05 M, not 0.52 M.
+
+  ## SCOPE OF THESE NUMBERS (as originally written)
 
   **Internally clean.** All five block-count rows and the parameter-matched
   `dense h=724` control ran at the same lr (1e-4), epochs (30) and `step_size` (4),
-  so the ranking by block count is a fair comparison.
+  so the ranking by block count is a fair comparison. — *Not true: see above. They
+  did not share a model class.*
 
   **But this is not the LRA task.** `step_size: 4` makes `seq_len` 256 rather than
   1024 *and* `input_size` 4 rather than 1 — the model sees four adjacent pixels per

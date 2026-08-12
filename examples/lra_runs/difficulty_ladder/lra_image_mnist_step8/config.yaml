@@ -1,0 +1,54 @@
+notes: "## A SCREENING RUN, ONE SEED, ONE LEARNING RATE\n\nThis cell is one of 20\
+  \ in `difficulty_ladder/`, run to locate a\ndataset/`step_size` combination worth\
+  \ studying properly. It is not a benchmark\nresult and no number here should be\
+  \ quoted on its own.\n\n**One seed and one learning rate (1e-3).** There are no\
+  \ error bars beyond\nevaluation-set sampling noise, and a model that would do better\
+  \ at a different\nrate looks worse here. 1e-3 was chosen because every past run\
+  \ at\n`hidden_size: 128` trained all five of these models without diverging; the\n\
+  divergences recorded in `RESEARCH_LOG.md` 2.4 were all at $d_h = 2048$.\n\n**`lra_toy_bw`\
+  \ and `lra_image_mnist` hold 1000 rows**, so their test splits are\n100 rows and\
+  \ the standard error is about 0.05 \u2014 differences below ~0.14 are not\nresolvable\
+  \ there. Those two rungs can support \"saturated / not saturated\" and\nnothing\
+  \ finer. `lra_image` and `lra_pathfinder` have 1000-row test splits and\nresolve\
+  \ about 0.04.\n\n**Epoch budgets differ by dataset** (20 / 200 / 50 / 50) because\
+  \ a single budget\nis impossible across a ladder where one task separates in two\
+  \ epochs and another\nsits at chance until epoch 60. They are recorded per cell\
+  \ in the Setup table.\n\n**Cells are different tasks.** `step_size` sets both `seq_len`\
+  \ and `input_size`,\nso accuracies from two cells may not be placed on one axis.\n"
+dataset:
+  max_points: null
+  train_frac: 0.8
+  val_frac: 0.1
+  split_seed: 0
+  embedding: null
+  local: true
+  data_dir: ../generatedata/data/processed
+  name: lra_image_mnist
+  step_size: 8
+training:
+  epochs: 200
+  batch_size: 64
+  lr: 0.001
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+models:
+- name: nn.LSTM
+  type: lstm
+  hidden_size: 128
+- name: nn.GRU
+  type: gru
+  hidden_size: 128
+- name: nn.RNN
+  type: rnn
+  hidden_size: 128
+- name: S2D dense
+  type: sequential2d
+  hidden_size: 128
+  K: 1
+- name: S2D monarch nb=4
+  type: sequential2d
+  hidden_size: 128
+  K: 1
+  W_hh: monarch
+  num_blocks: 4

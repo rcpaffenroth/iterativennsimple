@@ -201,13 +201,37 @@ class MonarchNoViews(torch.nn.Module):
 
 
 def make_block(kind, in_features, out_features, spec):
-    """One block of the Sequential2DRNN map.  Bias-free: bias belongs to the slot."""
+    """One block of the Sequential2DRNN map.  Bias-free: bias belongs to the slot.
+
+    `use_factorization=False` is fixed here rather than exposed in the config.
+    With MonarchLinear's default, a `num_blocks` that happens to be a perfect
+    power (4, 8, 9, 16, ...) switches to the weight-tied factored model, so
+    `num_blocks` would move three things at once: the sparsity of S, whether the
+    blocks are independent, and the initialisation gain of the layer.  Measured
+    at d = 512, comparing `to_dense()` against a dense `torch.nn.Linear`:
+
+        nb    mode           params     sigma_max   ||W||_F / sqrt(d)
+        --    dense          262,144      1.148          0.578
+         2    independent    131,072      1.129          0.577
+         4    factored        32,768      0.871          0.335
+         8    factored         8,192      0.570          0.196
+        16    factored         2,048      0.363          0.105
+
+    The gain column is the one that matters for a recurrence: at nb >= 4 the
+    factored W_hh is a strict contraction in *every* direction at initialisation,
+    so the hidden state cannot carry information across timesteps for reasons
+    that have nothing to do with sparsity.  Independent blocks hold the dense
+    gain of 1/sqrt(3) at every nb, which is what makes nb a sparsity knob alone.
+    """
     if kind == 'linear':
         return torch.nn.Linear(in_features, out_features, bias=False)
     if kind == 'monarch':
-        return MonarchNoViews(MonarchLinear.from_uniform_blocks(
+        monarch = MonarchLinear.from_uniform_blocks(
             in_features, out_features, num_blocks=spec.get('num_blocks', 4),
-            bias=False, seed=spec.get('seed', 0)))
+            bias=False, use_factorization=False, seed=spec.get('seed', 0))
+        assert monarch.num_factors is None, \
+            'use_factorization=False did not take effect; see MonarchLinear.__init__'
+        return MonarchNoViews(monarch)
     raise ValueError(f'unknown block type {kind!r}')
 
 

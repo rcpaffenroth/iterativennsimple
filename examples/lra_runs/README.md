@@ -204,6 +204,8 @@ at $d_h$ = 128, `step_size: 1`:
   several small matmuls plus gathers, and at hidden 128 a dense matmul is already
   trivially cheap, so the overhead dominates. This is the same conclusion
   `notebooks/advanced/sparse_scripts/README.md` reaches for CSR: structured sparsity
-  pays off at scale, not at these sizes. `image_monarch/` measures the same effect
-  at $d_h$ = 2048, where cost is roughly linear in block count while
-  $|W_{hh}| = 2 d_h^2/\text{nb}^2$ falls quadratically.
+  pays off at scale, not at these sizes. **That overhead is a constant, not a
+  function of block count** — at $d_h$ = 2048 it is 0.112 → 0.125 ms across `nb`
+  2 → 16 while $|W_{hh}| = d_h^2/\text{nb}$ falls 8×. `image_monarch/` appears to
+  show cost rising with `nb`; it ran on `MonarchLinear`'s factored path, and
+  `RESEARCH_LOG.md` §2.3 records the correction.

@@ -116,7 +116,14 @@ directories. Tables in `examples/lra_runs/*/results.md`.
       or near the last one means the number is a lower bound. (A `was_truncated()`
       helper used to flag this automatically and was removed — a reader sees it from
       the table unaided, so the detector was machinery standing in for noticing.)
-- [ ] **Monarch as a regulariser: UNRESOLVED, not answered.** At $d_h = 2048$
+- [ ] **Monarch as a regulariser: the one supported claim is WITHDRAWN.** The
+      `nb` = 4, 8, 16 rows below ran on `MonarchLinear`'s factored path and dense
+      and `nb=2` did not, so `nb` moved sparsity, model class and initialisation
+      gain together ($\sigma_{\max}$ = 0.87 / 0.60 / 0.42 against dense's 1.15 —
+      strict contractions in every direction). "Heavy sparsity is clearly worse" is
+      fully explained by that. See `RESEARCH_LOG.md` §2.3. Redo with
+      `use_factorization=False`. The original entry follows; its resolution
+      analysis still stands, only the attribution does not. At $d_h = 2048$
       fixed, seq 256, one seed, all rows at lr 1e-4 (val): dense 0.243, nb=2 0.239,
       nb=4 0.205, nb=8 0.161, nb=16 0.151, and the parameter-matched control
       dense $h{=}724$ 0.239.
@@ -133,8 +140,9 @@ directories. Tables in `examples/lra_runs/*/results.md`.
       | dense vs nb=8 | 4.59 | 6.70 | real |
       | dense vs nb=16 | 5.21 | 7.36 | real |
 
-      So what the run supports: **heavy sparsity (nb $\ge$ 8) is clearly worse than
-      dense or nb=2.** Nothing else. In particular the parameter-matched control —
+      What the run was said to support — **heavy sparsity (nb $\ge$ 8) is clearly
+      worse than dense or nb=2** — is now WITHDRAWN, see the banner above. In
+      particular the parameter-matched control —
       previously called "decisive" here — is $z = 1.2$ on test and settles nothing.
       An earlier version of this entry described the five numbers as "falling
       monotonically"; three of the four gaps are below the resolution limit.
@@ -154,14 +162,17 @@ directories. Tables in `examples/lra_runs/*/results.md`.
       a wider input, not a shorter version of the same one. The value 4 was chosen
       arbitrarily; the argument for shortening gave a direction, not a number.
       Re-run at `step_size: 1` before quoting this against anything at seq 1024.
-- [x] **More Monarch blocks costs more time, not less.** 8.4 -> 18.2 -> 24.7 -> 47.6
-      -> 92.1 s/epoch as $W_{hh}$ parameters fell 4.19 M -> 0.033 M: an 11x slowdown
-      for a 128x parameter reduction. (An earlier revision said 4.23 M -> 0.06 M and
-      70x, mixing the *total* parameter count into a $W_{hh}$ comparison.
-      $|W_{hh}| = 2 d_h^2/\text{nb}^2$.) Each block is a small matmul plus a gather and we are
-      launch-bound, so cost is roughly linear in `nb` while FLOPs fall as
-      $1/\text{nb}^2$. The FLOP-saving role of block count needs $d_h$ in the tens of
-      thousands. `MonarchLinear.forward(use_views=False)` is 1.8-2.2x faster and is
+- [x] **CORRECTED: Monarch's cost is flat in `nb`, not linear in it.** The training
+      series 8.4 -> 18.2 -> 24.7 -> 47.6 -> 92.1 s/epoch, and the per-call series it
+      rested on, were measured on `MonarchLinear`'s factored path, which rebuilds
+      $nb$ block products per forward call. Re-measured at $d_h = 2048$ with
+      `use_factorization=False`: 0.112 / 0.113 / 0.118 / 0.125 ms at `nb` = 2 / 4 /
+      8 / 16, a 12% rise across an 8x change, against a dense 0.022 ms. So Monarch
+      costs ~5x dense at any `nb`, flat. The old conclusion that the FLOP-saving
+      role needs $d_h$ in the tens of thousands does not follow. The training series
+      has not been re-measured. Full numbers in `RESEARCH_LOG.md` §2.3.
+      ($|W_{hh}| = d_h^2/\text{nb}$ independent, $n\,d_h^2/\text{nb}^2$ factored.)
+      `MonarchLinear.forward(use_views=False)` is 1.8-2.2x faster and is
       used via the `MonarchNoViews` wrapper in `examples/lra_benchmark.py`, since
       `Sequential2D` cannot pass keyword arguments to blocks.
 - [x] **Flat compute cost in width is about wall-clock only, not trainability.**
@@ -245,11 +256,10 @@ Recorded so the negative results are not rediscovered. Full tables in
       $\ln 10$ and worsened monotonically with width, and GRU h=2048 diverged. That
       is a step-size artefact, not a capacity result. `image_wide_lr/` crosses
       $d_h$ with `lr` and is written but not yet run.
-- [ ] **More Monarch blocks costs more time, not less, at these sizes.** At
-      $d_h = 2048$: per-call 0.024 ms dense, 0.124 (nb=2), 0.195 (nb=4), 0.771
-      (nb=16) — roughly linear in `nb` while FLOPs fall as $1/\text{nb}^2$, because
-      each block is a small matmul plus a gather and we are launch-bound. The
-      FLOP-saving role of block count needs $d_h$ in the tens of thousands. The
+- [ ] **SUPERSEDED — see the corrected entry above.** At $d_h = 2048$: per-call
+      0.024 ms dense, 0.124 (nb=2), 0.195 (nb=4), 0.771 (nb=16) — "roughly linear in
+      `nb`". Those `nb` = 4 and 16 points were the factored path; with
+      `use_factorization=False` the series is flat at 0.112-0.125 ms. The
       *regularisation* role is untested; `image_monarch/` is written but not run.
       `MonarchLinear.forward(use_views=False)` is 1.8-2.2x faster and is now used
       via a wrapper, since `Sequential2D` cannot pass keyword arguments to blocks.

@@ -88,24 +88,70 @@ Confirmed under real training: 29.9 / 29.4 / 29.1 s per epoch at $d_h$ = 128 / 5
 to NaN, and the wide models needed much smaller learning rates. Flat wall-clock says
 nothing about optimisation difficulty.
 
-### 2.3 More Monarch blocks costs more time, not less **[det]**
+### 2.3 CORRECTED: Monarch's cost is *flat* in `nb`, not linear in it **[det]**
 
-Per-call at $d_h = 2048$, batch 64: dense 0.024 ms, nb=2 0.124, nb=4 0.195, nb=16
-0.771. Cost is roughly **linear in `nb`** while parameters fall as $1/\text{nb}^2$,
-because each block is a small matmul plus an index gather and we are launch-bound.
-Under training: 8.4 → 18.2 → 24.7 → 47.6 → 92.1 s/epoch as $W_{hh}$ parameters fell
-4.19 M → 0.033 M — an 11× slowdown for a 128× parameter reduction. (Earlier
-revisions of this line said 0.06 M and 70×, having used nb=16's *total* parameter
-count where the $W_{hh}$ count was meant. $|W_{hh}| = 2 d_h^2 / \text{nb}^2$, so at
-$d_h = 2048$, nb=16 it is 32,768; the run's 63,498 total also carries $W_{xh}$,
-the slot bias and the head.)
+**What this section said until now:** "cost is roughly linear in `nb`", from
+per-call timings at $d_h = 2048$, batch 64 — dense 0.024 ms, nb=2 0.124, nb=4
+0.195, nb=16 0.771 — and the conclusion that "the FLOP-saving role of block count
+needs $d_h$ in the tens of thousands".
 
-The FLOP-saving role of block count needs $d_h$ in the tens of thousands. RCP's
-call: pay this on small problems to keep the code clean.
+**Why it was wrong.** Those timings measured two different models. `MonarchLinear.__init__`
+called `_factorization(num_blocks)` unconditionally for square uniform blocks, so
+whenever `nb` was a perfect power (4, 8, 16, but *not* 2) the layer silently stored
+$n$ shared factors and rebuilt all $n^k$ blocks as products **on every forward
+call**. The rising cost was those $nb(k-1)$ extra matmuls per call, not the block
+structure. `MonarchLinear` now takes `use_factorization` (default `True`,
+preserving the old behaviour); `examples/lra_benchmark.py` fixes it `False`.
 
-`MonarchLinear.forward(use_views=False)` is 1.8–2.2× faster than the default and is
-reached via the `MonarchNoViews` wrapper, because `Sequential2D` calls
-`block.forward(x)` with no keyword arguments.
+Re-measured at the same $d_h = 2048$, batch 64, `use_views=False`, both paths:
+
+| `nb` | factored (ms) | **independent (ms)** | $\|W_{hh}\|$ independent |
+| ---: | ---: | ---: | ---: |
+| dense | 0.022 | — | 4,194,304 |
+| 2 | 0.113 | 0.112 | 2,097,152 |
+| 4 | 0.175 | **0.113** | 1,048,576 |
+| 8 | 0.352 | **0.118** | 524,288 |
+| 16 | 0.669 | **0.125** | 262,144 |
+
+The factored column reproduces the old numbers to ~15%, so this is the same
+measurement, not a contradicting one. The independent column rises **12% across an
+8× change in `nb`**.
+
+**What is true.** Monarch at *any* `nb` costs about 5× a dense matmul at
+$d_h = 2048$ (0.112 against 0.022) — the launch-bound floor of a `bmm` plus gathers
+against one cuBLAS call — and that overhead is **flat in `nb`**. So block count is
+close to free in wall-clock, and the old conclusion that sparsity cannot pay below
+$d_h$ in the tens of thousands does not follow from this measurement.
+
+**Not re-measured:** the training-time series 8.4 → 18.2 → 24.7 → 47.6 → 92.1
+s/epoch as $W_{hh}$ fell 4.19 M → 0.033 M. That was also the factored path, and it
+should flatten similarly — but that is a prediction, not a measurement.
+
+Parameter counts differ between the two paths and this has bitten before:
+$|W_{hh}| = d_h^2/\text{nb}$ with independent blocks, against $n\,d_h^2/\text{nb}^2$
+when factored. (An earlier revision of this line also said 0.06 M and 70×, having
+used nb=16's *total* parameter count where the $W_{hh}$ count was meant.)
+
+Unaffected by any of the above: `MonarchLinear.forward(use_views=False)` is
+1.8–2.2× faster than the default and is reached via the `MonarchNoViews` wrapper,
+because `Sequential2D` calls `block.forward(x)` with no keyword arguments.
+
+Also **[det]**, and the reason §3.3 below is now withdrawn: under factorization each
+block is a product of $k$ Kaiming factors, so the layer's gain collapses. At
+$d_h = 512$, comparing `to_dense()` against a dense `torch.nn.Linear`:
+
+| `nb` | mode | $\sigma_{\max}$ | $\|W\|_F/\sqrt{d}$ |
+| ---: | --- | ---: | ---: |
+| dense | — | 1.148 | 0.578 |
+| 2 | independent | 1.129 | 0.577 |
+| 4 | factored | 0.871 | 0.335 |
+| 8 | factored | 0.570 | 0.196 |
+| 16 | factored | 0.363 | 0.105 |
+
+At `nb` $\ge 4$ the factored $W_{hh}$ has $\sigma_{\max} < 1$: a strict contraction
+in *every* direction at initialisation, so nothing survives a single step, let
+alone 256. With `use_factorization=False` the gain sits at the dense $1/\sqrt3$ for
+every `nb` from 2 to 64, so `nb` becomes a sparsity knob alone.
 
 ### 2.4 `torch.nn.GRU` at $d_h = 2048$ is unstable on LRA image **[det]**
 
@@ -170,7 +216,25 @@ Every matched comparison says width **hurts**: at lr 3e-4, h=512 0.1490 vs h=204
 **The width question is open.** Settling it needs the same lr grid at every width, at
 fixed epochs.
 
-### 3.3 Monarch sparsity as a regulariser — UNRESOLVED, not answered **[stat]**
+### 3.3 WITHDRAWN: Monarch sparsity as a regulariser **[stat]**
+
+**The one claim this sweep was said to support — "heavy sparsity (nb ≥ 8) is
+clearly worse than dense or nb=2" — is withdrawn, not merely unresolved.** Its
+`nb` = 4, 8, 16 rows ran on the factored path (§2.3) and its dense and `nb=2` rows
+did not, so `nb` moved three things at once: the sparsity of $S$, whether the
+blocks were independent or weight-tied products, and the initialisation gain of
+$W_{hh}$. The third alone accounts for the result: at $d_h=2048$ those rows had
+$\sigma_{\max}$ = 0.87 / 0.60 / 0.42, all below 1, so their hidden state was a
+strict contraction in every direction at initialisation while dense and `nb=2`
+(1.15, 1.15) were not. A model that cannot carry information across one step will
+lose across 256 of them for reasons that have nothing to do with sparsity.
+
+The $z$ values below are unaffected as arithmetic; what is withdrawn is the
+attribution of the gap to sparsity. The sweep must be redone with
+`use_factorization=False`, which is §5 item 3.
+
+The original entry follows, retained because the resolution analysis in it is still
+the right analysis:
 
 $d_h = 2048$ fixed, `step_size: 4`, all rows at lr 1e-4 (val): dense 0.243, nb=2
 0.239, nb=4 0.205, nb=8 0.161, nb=16 0.151, and the $W_{hh}$-matched control dense
@@ -187,13 +251,16 @@ With 1000 evaluation rows near $p = 0.2$, differences below ~0.04 are not resolv
 | dense vs nb=8 | 4.59 | 6.70 | real |
 | dense vs nb=16 | 5.21 | 7.36 | real |
 
-**Supported:** heavy sparsity (nb ≥ 8) is clearly worse than dense or nb=2. Nothing
-else. The parameter-matched control — previously called "decisive" — settles nothing
-at $z = 1.2$ on test.
+**Previously stated as supported:** heavy sparsity (nb ≥ 8) is clearly worse than
+dense or nb=2 — **now withdrawn**, per the banner above: those are exactly the rows
+whose initialisation gain collapsed. The parameter-matched control — previously
+called "decisive" — settles nothing at $z = 1.2$ on test either.
 
-Three further limits: one seed; the setting was weakly powered as a regularisation
-test (dense's train/val gap was only 0.04); and it ran at `step_size: 4`, so it is a
-different task from every seq-1024 run (§4.1).
+Four further limits: one seed; the setting was weakly powered as a regularisation
+test (dense's train/val gap was only 0.04); it ran at `step_size: 4`, so it is a
+different task from every seq-1024 run (§4.1); and the parameter-matched control was
+matched against *factored* counts, so `dense h=724` (524,176) pairs with what is now
+`nb=8` (524,288), not `nb=4` (1,048,576).
 
 ### 3.4 $K > 1$ on copy-with-delay **[stat]**
 
@@ -258,6 +325,25 @@ both: such code adds complexity that itself needs checking and can introduce bug
 report generator). The distinction that survived: correctness fixes and compute
 savings belong in the code; judgement aids do not.
 
+### 4.7 A library default silently changed the model class
+
+`num_blocks` was treated as one knob — sparsity — across `image_monarch/`, two
+sections of this log and three of `TODO_Sequential2DRNN.md`. It was three knobs,
+because `MonarchLinear.__init__` inferred the factored representation from whether
+`num_blocks` happened to be a perfect power. Nothing in a config, a row name or a
+results table showed which model had been built, and the affected values (4, 8, 16)
+were exactly the ones a sweep naturally picks.
+
+This is §2.8's lesson one level below the harness: a parameter that changes the
+task is not a cost dial, and a parameter that changes the *model class* is not a
+sparsity dial. The check that would have caught it is cheap and is now the habit —
+**build the object and measure it before sweeping it**: parameter count, spectral
+norm at initialisation, and per-call cost, tabulated against the knob. Three of
+those numbers moved together and none of them was the one being swept.
+
+`use_factorization` now makes the choice explicit; the harness fixes it `False` and
+asserts the outcome. The default is unchanged, so existing work is untouched.
+
 ---
 
 ## 5. Open questions, in the order they seem worth doing
@@ -271,8 +357,9 @@ savings belong in the code; judgement aids do not.
    to get what gating provides — which is the paper's thesis.
 2. **Redo the width sweep properly** — the same lr grid at every width, fixed epochs
    (§3.2).
-3. **Redo the Monarch sweep at `step_size: 1`**, with `max_points` for cost, and with
-   more than one seed (§3.3, §4.1).
+3. **Redo the Monarch sweep with `use_factorization=False`**, at a `step_size` where
+   our model actually learns, and with more than one seed (§2.3, §3.3, §4.1). The
+   `difficulty_ladder/` screen exists to locate that `step_size`.
 4. **Seed replication.** Nothing in this log has error bars. Three seeds on any
    **[stat]** claim would change what can be said.
 5. **A compute-bound rather than memory-bound task**, to test $K > 1$ where it has
