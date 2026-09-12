@@ -1,0 +1,27 @@
+# One step of a recurrent map, written as a block matrix.
+#
+#                x_in(4)    h1_in(6)   h2_in(6)
+#    h_out(6) [  1.0*I      0.5        0.25*I  ]
+#    y_out(3) [  0          0          0.1     ]
+#
+# Constants rather than random draws so that the example is reproducible without
+# a seed.  Comments like this one are dropped by any conversion -- the converter
+# prints to stdout and never rewrites this file.
+
+in_slots:  {x_in: 4, h1_in: 6, h2_in: 6}
+out_slots: {h_out: 6, y_out: 3}
+
+blocks:
+  # The input is injected into the first four coordinates of the hidden slot.
+  # A rectangular `diagonal` is torch.eye(6, 4), which is what makes this work.
+  - {from: x_in,  to: h_out, values: {const: 1.0},  pattern: diagonal, trainable: none}
+
+  # Dense trainable recurrence from the first hidden slot.
+  - {from: h1_in, to: h_out, values: {const: 0.5},  trainable: all}
+
+  # Diagonal recurrence from the second: only the diagonal exists, and `nonzero`
+  # means only the diagonal trains, so it cannot fill in.
+  - {from: h2_in, to: h_out, values: {const: 0.25}, pattern: diagonal, trainable: nonzero}
+
+  # Frozen readout.
+  - {from: h2_in, to: y_out, values: {const: 0.1},  trainable: none}

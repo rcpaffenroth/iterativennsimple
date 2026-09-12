@@ -5,24 +5,23 @@
 other; the judgement then becomes a rule in `PRINCIPLES.md` Part 1 so that it does
 not have to be re-argued every session.
 
-**Status.** A and B written first, as the two poles. C was written afterwards, at
-RCP's request, as the cross of the two axes I had predicted mattered — so C is a
-test of my model of RCP's taste, not an independent entrant. D changes the rules:
-RCP licensed it to **sacrifice functionality for readability**, so it is not a
-drop-in replacement and is not commensurable with the others. Verdict section at
-the bottom is **not yet filled in** — it is RCP's to fill.
+**Status: settled.** A and B were written first, as the two poles. C came next, at
+RCP's request, as the cross of the two axes I had predicted mattered — a test of my
+model of RCP's taste rather than an independent entrant. D changed the rules: RCP
+licensed it to **sacrifice functionality for readability**, so it was never a
+drop-in replacement and was never commensurable with the others.
+
+**RCP kept D and deleted A, B and C.** D now lives at
+`iterativennsimple/MaskedLinear_simplified.py`. §7 records what that settles and
+what it does not; the *reason* for the choice is still RCP's to write, and this
+document's sections 1-6 are kept as the record of what was measured.
 
 | | |
 | --- | --- |
-| `iterativennsimple/MaskedLinear.py` | the original, untouched |
-| `iterativennsimple/MaskedLinear_A.py` | **A** — two matrices, written into by slices |
-| `iterativennsimple/MaskedLinear_B.py` | **B** — a `(values, mask)` pair, and a vocabulary of spec types |
-| `iterativennsimple/MaskedLinear_C.py` | **C** — B's pair, A's flat dispatch |
-| `iterativennsimple/MaskedLinear_D.py` | **D** — the same mathematics with the string interpreter removed; **not a drop-in** |
-| `tests/test_MaskedLinear_AB.py` | the evidence that A, B, C are the same layer and that D's mathematics survived its cuts |
-
-All four reimplementations are experiment artefacts. Nothing imports them; delete
-the losers once the verdict is recorded.
+| `iterativennsimple/MaskedLinear.py` | the original, untouched; still the reference implementation |
+| `iterativennsimple/MaskedLinear_simplified.py` | **D**, kept — the same mathematics with the string interpreter removed; **not a drop-in** |
+| `tests/test_MaskedLinear_simplified.py` | agreement with the reference, plus worked usage |
+| ~~`MaskedLinear_A.py`~~, ~~`_B.py`~~, ~~`_C.py`~~ | **A, B, C — deleted.** Described in §2, measured in §2-§3; the numbers stand, the files are gone |
 
 ---
 
@@ -90,14 +89,14 @@ that fills them.
 
 **B — "a `(values, mask)` pair, and a vocabulary of specifications."** Two
 organising ideas. First, `Block` is a `NamedTuple` of two equal-shaped matrices,
-and block matrices of `Block`s `stack` into one `Block` because stacking acts on
+and a 2D array of `Block`s assembles into one `Block` because assembly acts on
 the two matrices independently; every constructor assembles `Block`s and hands the
 result to `from_block`, the single place that writes into the module. Second, the
 string mini-language is parsed *once* into ten small frozen dataclasses (`Full`,
 `Diagonal`, `Bernoulli(p)`, `PerRow(n)`, `Gaussian(mu, sigma)`, ...) and everything
 downstream dispatches with `match` on those types rather than on string prefixes.
 
-**C — B's first idea without its second.** `Block`, `stack`, `frozen` /
+**C — B's first idea without its second.** `Block`, `block_matrix`, `frozen` /
 `trainable` / `trainable_where_nonzero`, and `from_block` as the one writer, exactly
 as in B; `support` and `values` as two flat `if/elif` functions, exactly as in A.
 Nothing else differs from either.
@@ -127,16 +126,16 @@ deep. The price is in §3: 20 of the 58 existing tests stop even running.
 C says the two halves of that trade are separable, and the measurement is the
 interesting part: **C is A's code volume (166 lines vs 164) with B's flatness
 (nesting 2, longest function 36 lines, and that 36 is 13 lines of docstring
-listing the mini-language).** So `Block`/`stack` is close to free — it pays for
+listing the mini-language).** So `Block`/`block_matrix` is close to free — it pays for
 itself by deleting the offset arithmetic it replaces — whereas the ten spec types
 cost B 53 code lines and ten names, and buy dispatch on types instead of string
 prefixes.
 
-**D is off this grid.** It keeps C's `Block`/`stack` and drops the two
+**D is off this grid.** It keeps C's `Block`/`block_matrix` and drops the two
 mini-languages outright, together with everything that existed to serve them. Its
 `from_description` replacement is to write the block matrix down:
 
-    MaskedLinear(stack([
+    MaskedLinear(block_matrix([
         [frozen(torch.zeros(5, 6)),                 trainable(torch.randn(5, 8) * 0.7 + 0.2)],
         [trainable_where_nonzero(0.3 * torch.eye(7, 6)),
          trainable_where_nonzero(torch.rand(7, 8).mul(2).sub(1) * bernoulli(7, 8, p=0.5))],
@@ -162,7 +161,10 @@ and both differ from the original [det, `test_only_A_is_seed_compatible_with_the
 
 ## 3. Evidence that the mathematics is unchanged
 
-- `tests/test_MaskedLinear_AB.py`: 56 tests, all passing [det]. Shared behaviour is
+- At the time of the comparison, `tests/test_MaskedLinear_AB.py` ran 56 tests over
+  all four implementations, all passing [det]. With A, B and C deleted this file is
+  now `tests/test_MaskedLinear_simplified.py` and runs 16: the agreement checks
+  below, and a section of worked usage. Shared behaviour was
   parametrised over all four implementations; exact entrywise agreement with the
   original is asserted for every deterministic construction (`__init__`,
   `from_MLP`'s structure, `from_coo`, `from_optimal_linear`, a fully deterministic
@@ -173,12 +175,13 @@ and both differ from the original [det, `test_only_A_is_seed_compatible_with_the
   `test_MaskedLinear.py`, `test_Sequential2D.py` and `test_SparseLinear.py` give
   **58 passed**, the same as the original [det].
 - **D substituted for the original: 38 passed, 20 failed** [det]. That number *is*
-  the sacrifice, measured rather than asserted. Every one of the 20 fails for one
+  the sacrifice, measured rather than asserted, and it is the reason `MaskedLinear.py`
+  stays where it is rather than being replaced. Every one of the 20 fails for one
   of three reasons — a call to `MaskedLinear(in_features, out_features)`, a call to
   `from_description`, or a call to `from_coo` — and none of them for a
   mathematical disagreement. `Sequential2D` is among the casualties.
-- D's mathematics is checked separately, against the original, in the last section
-  of the test file [det]: `dense` reproduces `torch.nn.Linear` entrywise under one
+- D's mathematics is checked separately, against the reference, in
+  `tests/test_MaskedLinear_simplified.py` [det]: `dense` reproduces `torch.nn.Linear` entrywise under one
   seed; the gradient still lands on `U`; `from_MLP` and `from_optimal_linear` agree
   with the original; the one-line replacement for `from_coo` applies the COO
   matrix; and `test_D_reproduces_a_description_it_can_no_longer_parse` writes out
@@ -234,6 +237,10 @@ from his answer. Verbatim from the version written with only A and B on disk:
 > and `stack`. [...] So my guess at the right answer is neither file as written:
 > **B's `Block`/`stack` with A's flat dispatch.**
 
+(`stack` is quoted as written at the time; it has since been renamed
+`block_matrix`, for the reason in `PRINCIPLES.md` §1.5 — the old name was borrowed
+from `torch.stack`, which adds an axis, and this does not.)
+
 C is that guess, made concrete. The argument for it, in one comparison —
 `from_optimal_linear`'s block matrix in C:
 
@@ -287,22 +294,93 @@ the cut list, which is design-record material. In a real merge the cut list belo
 in this document and D's docstring shrinks by a third. Left in place here because
 the cuts *are* the experiment.
 
-## 6. What is not written
+## 6. The configuration path — written, in `masked_linear_simplified_config.py`
 
-- The empty cell of the §2 table — slice assignment with parse-to-types dispatch.
-  I do not expect it to be informative: it pairs the half of B I think is a cost
-  with the half of A I think is a cost. Ask if you disagree.
-- **The ~25-line string adapter that would make D usable by the existing config
-  path**, living in `Sequential2D` rather than in the layer. This is the piece of
-  work that would turn D from an experiment into a proposal, and it is the thing
-  to ask for if D reads well.
+§2 recorded that dropping `from_description` cost the YAML path, and that the fix
+belonged next to the configuration files rather than inside the layer. That module
+now exists: `iterativennsimple/masked_linear_simplified_config.py` imports
+`MaskedLinear_simplified` and the layer knows nothing about it.
+
+Four candidate formats were written and compared the same way the four
+implementations were, by building one block matrix in each and asserting they
+agree. Two were cut as dominated:
+
+- **Strings in a grid** (`"const:0.5 / diagonal / nonzero"`), the original's idea
+  cleaned up. Its parser was 22 lines and bought two lines of YAML over the dict
+  form — and parsing is exactly where the original's bugs were: order-dependent
+  prefix matching, floats read out of the middle of strings.
+- **YAML names a Python builder** and carries only its scalar knobs. Smallest
+  adapter of the four at 13 lines and the most expressive, but the configuration
+  stops recording the structure, so reproducing a run needs the Python at that
+  commit and a layout sweep means editing code.
+
+The two that survived are kept, and **both**, at RCP's suggestion, which is better
+than either alone:
+
+- **the edge list** — named slots, only the non-zero blocks listed, everything
+  else zero and frozen. This is the only format the loader accepts. It grows with
+  the number of blocks rather than with slots², `from`/`to` remove the row/column
+  orientation trap, and a structural change between two runs is a one-line diff.
+- **the grid** — the same information as a block matrix, one row per output slot.
+  Not loadable; `from_edges(to_edges(grid))` builds one. It exists to be *looked
+  at*, and `python -m iterativennsimple.masked_linear_simplified_config <config.yaml>` prints
+  it — as YAML, one line per block row, and as an aligned table — next to the
+  shape and trainable-parameter count of the layer it builds.
+
+The point of keeping both is RCP's, and it is the part I had missed: the two
+formats fail differently, so **rendering one from the other is a check**. You write
+the edge list, look at the grid, and a block you meant to write and didn't shows up
+as a hole in a matrix rather than as an absent line in a list.
+
+Limits, asserted in `tests/test_masked_linear_config.py`: grid → edges → grid is
+exact; edges → grid → edges is exact up to the order of the blocks list, since the
+edge list is a *set* of blocks; YAML comments do not survive any conversion, which
+is why the command line prints to stdout and nothing writes a config file.
+
+(Still unwritten, and probably not worth writing: the empty cell of the §2 table,
+slice assignment with parse-to-types dispatch. It pairs the half of B I think is a
+cost with the half of A I think is a cost.)
 
 ## 7. Verdict
 
-*To be filled in by RCP, then promoted to `PRINCIPLES.md` Part 1 as a rule about
-what to do in new code, with the reason attached.*
+**What was decided:** D was kept as `iterativennsimple/MaskedLinear_simplified.py`;
+A, B and C were deleted; the original `MaskedLinear.py` stays as the reference
+implementation and as the layer the existing config path uses. The configuration
+language came back separately, in `masked_linear_simplified_config.py` (§6).
 
-- Preferred: ?
-- What made the difference: ?
-- What to always do:
-- What to never do:
+**What made the difference**, in RCP's words, given after he read the file and
+before he saw any guess of mine:
+
+1. On the test helper `train_briefly`: *"I like the name of the function. It is
+   clear and approachable. That is a nice unit of code that I like and can lay the
+   foundation for a student to copy that function and extend it."*
+2. On the docstring's before-and-after example: *"I really like the way you gave the
+   example and described it as 'longer on the page but shorter to read'. I think
+   that single phrase captures a lot."*
+3. On the `Block` type: *"the simple `Block` class is nice. It cuts at the joint."*
+4. On `stack`: *"I found the `stack` function confusing at first glance. It is, in
+   some sense, a '2D unzip' isn't it?"* — renamed `block_matrix`, with the unzip
+   drawn in its docstring.
+5. On the trainability functions and the "what torch does not provide" section:
+   *"nice and cut at the joint."*
+6. On what was missing: *"the one thing that I thirst for is what you called the
+   'mini-language' that lets one define a MaskedLinear from a configuration."*
+
+**What I had predicted, and where I was wrong.** §5 predicted the file would be
+judged on 70 lines of code, flat nesting and the absence of an interpreter. Every
+one of those is a property of the file *as a whole*, and not one of them is what
+was actually cited. Four of the six items above are about **individual names** —
+`train_briefly`, `Block`, `frozen`, `bernoulli`, `stack` — and the fifth is about a
+sentence in a docstring. The unit of judgement was smaller than the unit I was
+optimising, and "cuts at the joint" is a criterion I did not have: a name earns its
+place when some operation consumes the thing it names whole, which is exactly what
+separated `Block` (kept) from B's ten spec dataclasses (deleted).
+
+I was right that the interpreter had to go, and wrong about why it mattered — not
+because the file got shorter, but because a name you must read the body of is the
+defect, and a mini-language is a hundred of them.
+
+**Promoted to `PRINCIPLES.md` Part 1** as §1.5 (a name is a promise the body need
+not be read), §1.6 (longer on the page can be shorter to read), §1.7 (introduce a
+name only at a joint), §1.8 (write what the library does not provide, and mark the
+boundary) and §1.9 (a configuration language belongs with the configuration files).

@@ -1,0 +1,29 @@
+# A sparse hidden-to-hidden block: the density p is the axis you sweep.
+#
+# `bernoulli: 0.1` keeps each of the 64*64 = 4096 entries independently with
+# probability 0.1, so about 410 survive, with a standard deviation of
+# sqrt(4096 * 0.1 * 0.9) = 19.  `trainable: nonzero` makes exactly those entries
+# trainable, so the zeros are structural: training moves the surviving entries and
+# cannot fill the rest in.
+#
+# READ THIS BEFORE SWEEPING p.  Density is a capacity dial, not only a sparsity
+# dial: halving p halves the trainable parameters in this block.  A comparison
+# across p is therefore confounded between "sparsity regularises" and "fewer
+# parameters", exactly as the Monarch block-count sweep was -- PRINCIPLES.md
+# sections 2.3 and 2.8.  To separate them, hold the trainable count fixed by
+# widening h as p falls, and report both numbers.
+#
+# The command line prints the realised count, so run it after every change:
+#     uv run python -m iterativennsimple.masked_linear_simplified_config \
+#         examples/masked_linear_simplified_configs/sparse_recurrence.yaml
+
+in_slots:  {x_in: 8, h_in: 64}
+out_slots: {h_out: 64}
+
+blocks:
+  - {from: x_in, to: h_out, values: kaiming, trainable: all}
+  - {from: h_in, to: h_out, values: kaiming, pattern: {bernoulli: 0.1}, trainable: nonzero}
+
+# About 64*8 + 410 = 922 trainable entries, and it moves from run to run: the
+# pattern is drawn at build time and is not seeded by the config.  Seed the process
+# (torch.manual_seed) if you need the same mask twice.

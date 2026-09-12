@@ -1,10 +1,11 @@
-"""Reimplementation D of MaskedLinear:  the same mathematics, with the string interpreter removed.
+"""MaskedLinear, simplified:  the same mathematics with the string interpreter removed.
 
-A, B and C are drop-in replacements for MaskedLinear.py.  **D is not.**  It was
-written under a different rule -- functionality may be sacrificed for
-readability -- so it keeps the mathematics and drops the machinery that exists
-to serve YAML configuration files.  What was cut, and what it costs, is listed
-at the bottom of this docstring.
+`MaskedLinear.py` is the reference implementation and this file is **not a
+drop-in replacement** for it: functionality was deliberately sacrificed for
+readability.  It keeps the mathematics and drops the machinery that exists to
+serve YAML configuration files.  What was cut, and what it costs, is listed at
+the bottom of this docstring; the experiment it came out of, with the
+measurements, is `tasks/STYLE_EXPERIMENT_MaskedLinear_simplified.md`.
 
 The layer is an ordinary linear layer whose weight is constrained to an affine
 family,
@@ -19,8 +20,8 @@ torch.nn.Linear; Omega = 0 freezes the layer at W_0.
 
 The layer is therefore *determined by* the pair (W_0, Omega) of equal-shaped
 matrices, and here that is taken literally: `Block` is such a pair, the pair is
-what the constructor takes, and block matrices of pairs `stack` into one pair.
-A block matrix is then written the way it is written on paper.  The original's
+what the constructor takes, and `block_matrix` assembles a 2D array of pairs into
+one pair.  A block matrix is then written the way it is written on paper.  The original's
 
     MaskedLinear.from_description(out_features_sizes=[5, 7], in_features_sizes=[6, 8],
                                  block_types=[[0,       'W'    ],
@@ -32,7 +33,7 @@ A block matrix is then written the way it is written on paper.  The original's
 
 becomes
 
-    MaskedLinear(stack([
+    MaskedLinear(block_matrix([
         [frozen(torch.zeros(5, 6)),                 trainable(torch.randn(5, 8) * 0.7 + 0.2)],
         [trainable_where_nonzero(0.3 * torch.eye(7, 6)),
          trainable_where_nonzero(torch.rand(7, 8).mul(2).sub(1) * bernoulli(7, 8, p=0.5))],
@@ -50,11 +51,11 @@ WHAT WAS CUT, AND WHAT IT COSTS
     written with torch directly -- `torch.randn(5, 8) * 0.7 + 0.2` is 'G=0.2,0.7'
     -- and only the three sparsity patterns torch does not provide are kept as
     functions below.  Cost: a dict or YAML file cannot name a block type, so
-    `Sequential2D.from_config` and the LRA harness cannot build this layer.
-    Restoring that is a ~25-line adapter mapping strings to these functions,
-    and it belongs next to the config loader that needs it, not inside the
-    layer: the string language exists for configuration files, so it should
-    live with them.
+    a configuration cannot reach this layer directly.  That is restored by
+    `iterativennsimple/masked_linear_simplified_config.py`, which is a separate module
+    holding a small closed vocabulary and a YAML loader -- it imports this file
+    and this file knows nothing about it.  A configuration language exists to
+    serve configuration files, so it lives with them.
   * `from_config`.  It forwarded six dict keys to identically-named arguments
     and is called from nowhere in the repository [det, grep].  Pure deletion.
   * `from_coo`, whose body is now one line the caller can write:
@@ -66,8 +67,8 @@ WHAT WAS CUT, AND WHAT IT COSTS
     including `Sequential2D`, passes two ints.  In exchange there is one
     construction path instead of two, no `torch.empty` followed by
     `reset_parameters`, and no allocate-then-overwrite -- so nothing is drawn
-    from the generator and immediately discarded, which is what makes B and C
-    unable to reproduce a recorded seed.
+    from the generator and immediately discarded, and a recorded seed still
+    reproduces.
   * `reset_parameters`.  Inlined, and it is the cut that costs nothing at all:
     each matrix's shape and initial value now appear on one line together
     instead of an empty allocation in one method and a fill in another.
@@ -97,13 +98,27 @@ class Block(NamedTuple):
     mask: torch.Tensor        # (out_features, in_features), Omega on this block, 1 = trainable
 
 
-def stack(blocks: list[list[Block]]) -> Block:
+def block_matrix(blocks: list[list[Block]]) -> Block:
     """Assemble a 2D array of Blocks into the single Block of the block matrix.
 
-    Stacking a block matrix is the same operation on W_0 and on Omega
-    independently, which is the whole reason for carrying them as a pair.  A row
-    of blocks whose heights disagree crashes here, in torch.hstack, with both
-    shapes in the message.
+    This is a 2D *unzip* followed by two ordinary assemblies.  A Block is a pair,
+    so a 2D array of Blocks is a 2D array of pairs -- and what is wanted is a pair
+    of 2D arrays.  Unzip it, assemble each half with hstack and vstack, and pair
+    the two results up again:
+
+        [[ (V00, M00), (V01, M01) ],  unzip   [[V00, V01],       [[M00, M01],
+         [ (V10, M10), (V11, M11) ]]   --->    [V10, V11]]  and   [M10, M11]]
+                                                   |                   |
+                                           hstack, then vstack   hstack, then vstack
+                                                   v                   v
+                                               W_0 (6, 7)          Omega (6, 7)
+
+    with, say, V00 (2, 3), V01 (2, 4), V10 (4, 3), V11 (4, 4).  That assembly is
+    the same operation on W_0 and on Omega and never mixes them, which is the
+    whole reason the two are carried together as one object.
+
+    Not torch.stack, which adds an axis -- this does not.  A row whose block
+    heights disagree crashes in torch.hstack with both shapes in the message.
     """
     values = torch.vstack([torch.hstack([b.values for b in row]) for row in blocks])
     mask = torch.vstack([torch.hstack([b.mask for b in row]) for row in blocks])
@@ -257,7 +272,7 @@ class MaskedLinear(torch.nn.Module):
         blocks = [[trainable(kaiming(n_out, n_in)) if i == j + 1 else frozen(torch.zeros(n_out, n_in))
                    for j, n_in in enumerate(sizes)]
                   for i, n_out in enumerate(sizes)]
-        return MaskedLinear(stack(blocks), bias=bias)
+        return MaskedLinear(block_matrix(blocks), bias=bias)
 
     @staticmethod
     def from_optimal_linear(X, Y, bias: bool = False) -> Any:
@@ -283,5 +298,5 @@ class MaskedLinear(torch.nn.Module):
         K = Y.size()[1]
         with torch.no_grad():
             W_ls = (torch.inverse(X.T @ X) @ X.T @ Y).T           # (K, D)
-        return MaskedLinear(stack([[frozen(torch.eye(D)), frozen(torch.zeros(D, K))],
+        return MaskedLinear(block_matrix([[frozen(torch.eye(D)), frozen(torch.zeros(D, K))],
                                    [frozen(W_ls),         frozen(torch.zeros(K, K))]]), bias=bias)

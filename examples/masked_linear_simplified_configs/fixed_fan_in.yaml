@@ -1,0 +1,24 @@
+# Every output sees a fixed number of inputs: `per_row`, not `bernoulli`.
+#
+# The two sparsity patterns are different claims about the structure.  `bernoulli: p`
+# is i.i.d. per entry, so row counts vary and a row can be empty -- a neuron with no
+# inputs at all.  `per_row: 4` draws four column indices for each row, so every row
+# has at least one and at most four.
+#
+# "At most", not "exactly", because the four draws are with replacement: the chance
+# that a given column is missed by all four is (63/64)^4 = 0.9386, so the expected
+# number of distinct columns per row is 64 * (1 - 0.9386) = 3.93, and the block holds
+# about 64 * 3.93 = 252 entries rather than 256.  Drawing without replacement would
+# need a randperm per row, which costs more than the guarantee is worth; the
+# shortfall is documented instead of paid for.
+#
+# `scattered: 256` would give the same expected count with neither guarantee --
+# 256 draws anywhere in the block, so some rows empty and some crowded.
+
+in_slots:  {h_in: 64}
+out_slots: {h_out: 64}
+
+blocks:
+  - {from: h_in, to: h_out, values: kaiming, pattern: {per_row: 4}, trainable: nonzero}
+
+# About 252 trainable entries out of 4096, i.e. 6.2% density.
