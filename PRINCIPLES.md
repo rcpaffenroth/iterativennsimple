@@ -175,6 +175,47 @@ you meant to write and did not shows up as a hole in a matrix rather than as a l
 that is simply absent from a list. That is what
 `python -m iterativennsimple.masked_linear_simplified_config <config.yaml>` is for.
 
+### 1.10 A check that can pass on an empty set is worse than no check
+
+§1.1 says do not build the detector if a human would notice unaided. This is the other
+half: **if you do build a check, it must be able to fail.** A control that passes
+vacuously manufactures confidence, which is strictly worse than having none.
+
+Two incidents in one session, both the same shape:
+
+- An assert meant to confirm a frozen parameter had not moved read
+  `torch.equal(model.A, trainable[0].new_tensor(model.A))` — comparing `A` against a
+  fresh copy of `A`. Always true. It could not have caught anything.
+- A cross-script control compared Experiment 4 at $M=1$ against Experiment 2, took a max
+  of absolute differences over the matched runs, and printed `worst disagreement
+  0.00e+00`. **Zero runs matched** — the results file had not been written yet — so the
+  max was over an empty sequence and the reported agreement was of nothing with nothing.
+  It was one command away from going into a report as a passing control.
+
+The rule: **assert the shape of the comparison before trusting its result.** Not
+`max(differences) < tol` but, first, `len(matched) == expected`, then the tolerance. The
+same applies to filters, joins and lookups anywhere a control is computed over a
+selection: the selection being empty is the most likely way to be wrong, and it is the
+one way that looks like success.
+
+A third instance, same session, same shape — this one a *wait* rather than a check. A
+follow-up run was chained behind a long sweep with
+
+    while pgrep -f "[d]ynamical_system_exp3to5" > /dev/null; do sleep 20; done; <run it>
+
+which waited 22 minutes for a process that had already exited, because `pgrep -f` matches
+full command lines and **the waiting shell's own command line contains the pattern**. The
+`[d]` trick stops `grep` matching itself; it does nothing for a wrapper holding the string
+as text. Match on `python.*<script>`, or on a PID, or on a sentinel file — and ask whether
+the condition can ever become false.
+
+The habit that catches all three in advance is one question, asked before the check or the
+wait is written: **what would make this fail?** If the answer cannot be named concretely, the check is
+decoration. The corollary is to test it against a case that *should* fail — the
+bit-identical controls in this project (`check_two_implementations_agree`,
+`check_contains_experiment_2`) are trustworthy partly because perturbing either model
+does make them fire.
+
 ---
 
 ## Part 2 — Claims
@@ -320,6 +361,126 @@ unable to answer the question they were written to ask.
 A cheap habit that would have caught most of them: after writing a config, print one
 line per model listing every axis, and look at the columns.
 
+### 2.11 Say what contains what, before you run it
+
+Before implementing a model class, **write down what it contains and what contains
+it.** Five lines of algebra routinely settle what a sweep would have answered
+expensively and with error bars.
+
+The incident. A planned experiment held the input $x$ fixed for $M$ inner steps and
+iterated $y_{k+1} = A x + B y_k$, the intent being to let $y$ "converge" before the
+next input arrives. Unrolling one outer step:
+
+    y <- B^M y + (I - B^M)(I - B)^{-1} A x
+
+which is the *same* one-step recurrence with $A' = (I-B^M)(I-B)^{-1}A$ and $B' = B^M$.
+Since $B'$ is constrained to have an $M$-th root, the inner-iteration model class is a
+**subset** of the one-step class, not an extension of it. It cannot win on
+representational grounds, so it is a control, not an experiment — and what survives is
+only that the *loss* differs, since the trajectory itself is penalised. That reordered
+the experiment queue before anything ran.
+
+The observable is mechanical: unroll the recurrence, read off the induced parameters,
+and ask whether the map from new parameters to old is onto. Nothing to install, no
+compute, and it converts a [stat] question into a [det] one — which §2.5 says to lead
+with whenever it is available.
+
+The failure mode this guards against is that **code feels like progress and algebra
+feels like stalling.** Writing the model and running it produces visible output within
+the hour; deriving that the model is contained in one you have already run produces
+nothing to look at, and is worth far more.
+
+### 2.12 A dataset is an object to be measured, not a given
+
+§4.7 says to build the object and measure it before sweeping it — parameter count,
+spectral norm, per-call cost — because three things moved together and none was the
+one being swept. The same habit applies to **data**, and is easier to skip, because a
+dataset arrives looking like ground truth.
+
+The incident. `generatedata`'s LRA generators draw rows with replacement:
+`rng.integers(0, len(dataset), size=num_points)`. Expected distinct draws are
+$N(1-e^{-n/N})$, so `lra_image` at 10,000 points from CIFAR's 50,000 should be about
+9,063 distinct. Measured: **9,072 distinct, 928 duplicate rows (9.3%)**. Under the
+configs' 0.8/0.1/0.1 split at `split_seed: 0`, **13.6% of the test set and 14.2% of
+the validation set are exact duplicates of training rows** — in every `lra_image` run
+in `RESEARCH_LOG.md`. Tasks that are *generated* rather than resampled from a table
+(`lra_pathfinder`, `lra_pathx`, `lra_toy_bw`) show 0%; see `RESEARCH_LOG.md` §3.5 for
+the full survey and for what this does and does not establish.
+
+The measurement cost was one call to `np.unique(X, axis=0)`.
+
+**Before the first run on a dataset, tabulate: row count, distinct row count, class
+balance, and the size of the train/test intersection.** A dataset is as much an object
+under study as a layer is, and it is the one nobody thinks to look at.
+
+### 2.13 The report format — provisional, under review
+
+**Status: RCP has not committed to this. It is recorded for use and review, not as a
+settled rule.** It came out of a session in which three complete reports were written at
+equal effort over the same results and handed over to be compared; the choice was
+immediate, which is the usual outcome and the reason for building artifacts rather than
+describing options. The reference implementation is
+`tasks/OVERVIEW_DYNAMICAL_SYSTEM.md`.
+
+**Three requirements, stated by RCP directly.**
+
+1. **Every report needs figures.** Not an appendix of them — figures next to the claim
+   they support. "They make it much more useful."
+2. **Use the vocabulary of the task file.** The assistant renamed RCP's "Experiment 1, 2,
+   3..." to "rungs of a ladder" and had to rename 160 occurrences across seven files and
+   four filenames to put it back. **If the person who set the problem gave it names, those
+   are the names.** Inventing a parallel vocabulary makes every later conversation cost a
+   translation.
+3. **An executive summary**, with the high-level take-aways and pointers into the rest of
+   the document.
+
+**The shape that was chosen**, of three offered — organised by *experiment*, over
+organised by *question* and organised by *figure*:
+
+    1  Executive summary      table of one-liners + a line of section links
+    2  Setup                  common to all experiments; the model, losses, data
+    3  Experiment 1           design -> controls -> table -> figures
+    4  Experiment 2           design -> table -> figures
+    5  Cross-cutting          what varies across the experiments, e.g. the losses
+    6  Settled on paper       derivations that cost no compute and changed the plan
+    7  Corrections            predictions registered in advance that turned out wrong
+    8  Design decisions       what was settled, and what was rejected with reasons
+    9  How to re-run this     exact commands, costs, data provenance, file map
+    10 Not established        and what is deferred on purpose
+
+It won because it **mirrors the structure of the task file** and because it extends by
+appending: a new experiment is a new section, and the cross-cutting sections absorb the
+rest. The question-led variant carried understanding better and is worth raiding for its
+"what we predicted and got wrong" section, which became §7 above.
+
+**Two additions that were kept** when a revised version was offered:
+
+- **State the resolution under each table, not once globally.** §2.6 says put the
+  uncertainty in the sentence making the claim; a table is a sentence. In practice this
+  means each table carries its own $\mathrm{se}$ and says which of its own comparisons
+  are resolvable — e.g. "chance → 0.593 is about 10 se and is not in doubt; cold-vs-warm
+  at ~0.10 is not resolved by any single cell."
+- **A "how to re-run this" section, with the exact commands.** RCP: *"I like the ability
+  to rerun things myself and this is super important to me."* Commands, wall-clock cost per
+  command, data provenance, and a file map. Treat this as the highest-value section after
+  the figures.
+
+**Five additions that were declined.** Recorded so they are not re-proposed blind; RCP's
+reasons were not given, so ask rather than assume if one seems newly worth having.
+
+| proposed | outcome |
+| --- | --- |
+| A `[det]`/`[stat]` column on every table row, and a tag on every prose claim | Declined. Label the key claims as Part 2 requires; do not tag exhaustively |
+| Moving Corrections to the front, right after the summary | Declined; it stays late |
+| An "axes table" listing all sixteen axes and their values (§2.10) | Declined |
+| A "what I would run next" section with costs | Declined |
+| A claim ledger — every claim with its label and evidence in one table | Declined, as predicted when it was offered |
+
+The claim ledger is worth one more sentence because the argument against it is general:
+**it restates claims that are already in the document, so there are two copies that can
+drift apart, and it is the judgement aid §1.1 says not to build.** If the ratio of
+deterministic to statistical claims is worth showing, one sentence shows it.
+
 ---
 
 ## Part 3 — Where things are
@@ -333,6 +494,7 @@ line per model listing every axis, and look at the columns.
 | `tasks/STYLE_EXPERIMENT_MaskedLinear_simplified.md` | the experiment §§1.5-1.9 came out of: four reimplementations of one module, what was measured, and what was kept |
 | `iterativennsimple/MaskedLinear_simplified.py` | the layer as §§1.5-1.8 would have it. **Not** a drop-in for `MaskedLinear.py`, which stays the reference |
 | `iterativennsimple/masked_linear_simplified_config.py` | its YAML loader and the two-format converter (§1.9); has a command line |
+| `tasks/OVERVIEW_DYNAMICAL_SYSTEM.md` | the dynamical-system experiments: design, results, figures, how to re-run. Reference implementation of §2.13 |
 | `PRINCIPLES.md` | this file |
 
 Two standing notes that are easy to get wrong and expensive to get wrong:
