@@ -771,6 +771,7 @@ and cover the $\mu{=}0$ rows only; backfilling costs ~50 minutes and is deferred
 | `README_Sequential2DRNN.md` | user-facing entry point for the module |
 | `examples/lra_runs/README.md` | harness, config schema, cost model |
 | `tasks/OVERVIEW_DYNAMICAL_SYSTEM.md` | the design record: settled decisions **and rejected readings** |
+| `tasks/NEXT_STEPS_DYNAMICAL_SYSTEM.md` | proposal for the next round: the other LRA datasets, the traps, and predictions registered in advance |
 | `examples/dynamical_system_exp1.py` | Experiment 1, closed form; writes `dynamical_system_runs/exp1/` |
 | `examples/dynamical_system_exp2.py` | Experiment 2, written twice and checked by `allclose`; writes `.../exp2/` |
 | `examples/dynamical_system_exp3to5.py` | Experiments 3-5 as the $(\sigma, M)$ square; resumes from `results.json` |

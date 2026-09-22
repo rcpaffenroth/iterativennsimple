@@ -41,6 +41,8 @@ miss, which is the most useful thing in this document.
 Design record, results, figures and re-run instructions are all in this one document;
 `RESEARCH_LOG.md` §6 carries the same results in the project's chronological record.
 
+**Next round:** `tasks/NEXT_STEPS_DYNAMICAL_SYSTEM.md` — extending to the other LRA datasets, written to hand to a fresh assistant. Its premise is that MNIST is too nearly-linearly-separable (whole-image least squares reaches 0.844) to show what extra iterations buy.
+
 ---
 
 ## 2. Setup
