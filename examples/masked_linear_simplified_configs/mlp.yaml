@@ -1,0 +1,26 @@
+# A feed-forward network of widths 4 -> 8 -> 8 -> 3, written as ONE square matrix.
+#
+# The state is the concatenation z = (z0, z1, z2, z3) of every layer's activations,
+# so the matrix is 23 x 23, and each layer's weight sits in the block just below the
+# diagonal.  One application of A advances every layer by one step:
+#
+#     z = (x, 0, 0, 0)  ->  (0, W1 x, 0, 0)  ->  (0, 0, W2 W1 x, 0)  ->  ...
+#
+# so the network's output appears in z3 after three applications.  This is what
+# MaskedLinear.from_MLP builds, and writing it as a config instead lets the widths
+# and the initialisation be swept.  The nonlinearity is not here: it belongs to the
+# slots, in Sequential2D, not to the matrix.
+
+in_slots:  {z0: 4, z1: 8, z2: 8, z3: 3}
+out_slots: {z0: 4, z1: 8, z2: 8, z3: 3}
+
+blocks:
+  - {from: z0, to: z1, values: kaiming, trainable: all}
+  - {from: z1, to: z2, values: kaiming, trainable: all}
+  - {from: z2, to: z3, values: kaiming, trainable: all}
+
+# Everything else is zero and frozen -- including the diagonal, so nothing persists
+# from one application to the next.  Compare identity_plus_update.yaml, where the
+# diagonal is an identity and the state does persist.
+#
+# 8*4 + 8*8 + 3*8 = 120 trainable entries.

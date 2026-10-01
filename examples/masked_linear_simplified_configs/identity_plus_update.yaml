@@ -1,0 +1,34 @@
+# A recurrence that starts as the identity and learns its departure from it.
+#
+# This is the case the whole A = W_0 + U .* Omega parameterisation exists for.  The
+# h_in -> h_out block has W_0 = I and Omega = 1, so its effective weight is
+#
+#     A_hh = I + U,     U = 0 at initialisation,
+#
+# which means the hidden state is copied forward exactly on step zero of training
+# and the optimiser learns a *correction* to that, rather than learning to transport
+# information from scratch.  A dense random W_hh has spectral norm below 1 at
+# initialisation and is therefore a contraction in every direction, which is the
+# leading suspect for why a vanilla recurrence does not learn on long sequences --
+# see RESEARCH_LOG.md section 5, open question 1.
+#
+# Note what is NOT expressible here: a cell is one (values, pattern, trainable)
+# triple, so "identity plus a *sparse* trainable update" is not two blocks in the
+# same place.  It is one block with values: identity and a pattern -- except that a
+# pattern would also mask out the identity.  If you want that, write it in Python
+# against MaskedLinear_simplified: Block(values=torch.eye(6), mask=bernoulli(6, 6, 0.1)).
+
+in_slots:  {x_in: 3, h_in: 6}
+out_slots: {x_out: 3, h_out: 6}
+
+blocks:
+  # The input is carried along unchanged, so later steps can still see it.
+  - {from: x_in, to: x_out, values: identity, trainable: none}
+
+  # Read-in.
+  - {from: x_in, to: h_out, values: kaiming, trainable: all}
+
+  # The recurrence: starts at I, every entry free to move.
+  - {from: h_in, to: h_out, values: identity, trainable: all}
+
+# 6*3 + 6*6 = 54 trainable entries.

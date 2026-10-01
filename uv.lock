@@ -796,7 +796,7 @@ wheels = [
 [[package]]
 name = "generatedata"
 version = "0.5.0"
-source = { git = "https://github.com/rcpaffenroth/generatedata.git?branch=feature%2Fhuggingface_backend#bf98aa3a6cf826f7e21b0d16a13288c65772f276" }
+source = { git = "https://github.com/rcpaffenroth/generatedata.git?branch=develop#1f0b388a841e2c6eeb84402de108c6e242f28038" }
 dependencies = [
     { name = "anywidget" },
     { name = "huggingface-hub" },
@@ -1097,7 +1097,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1,<9" },
-    { name = "generatedata", git = "https://github.com/rcpaffenroth/generatedata.git?branch=feature%2Fhuggingface_backend" },
+    { name = "generatedata", git = "https://github.com/rcpaffenroth/generatedata.git?branch=develop" },
     { name = "ipykernel", specifier = ">=6.29,<7" },
     { name = "ipympl", specifier = ">=0.9,<1" },
     { name = "jupyterlab", specifier = ">=4.3,<5" },

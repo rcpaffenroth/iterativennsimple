@@ -1,0 +1,143 @@
+# Where on the difficulty ladder does Sequential2DRNN sit at its frontier?
+#
+# Four datasets in increasing difficulty, each swept across step_size, with one
+# fixed set of hyper-parameters.  The quantity being looked for is NOT the cell
+# with the largest spread between models -- that is largely selectable by noise,
+# see the resolution column in summary.md.  It is the *frontier*: the hardest
+# cell at which `S2D dense` still demonstrably learns.
+#
+# Below the frontier (lra_toy_bw) every model saturates and no knob can move
+# anything.  Above it (lra_image at step_size 1, where our h=128 model reached
+# 0.173 against chance 0.100 in epoch_probe/) our model is at chance and no knob
+# can move anything either.  Only at the frontier do sparsity, K and
+# initialisation have somewhere to act, which is what phase 2 needs.
+#
+# STEP_SIZE IS THE AXIS HERE, DELIBERATELY.  It sets seq_len = x_y_index /
+# step_size *and* input_size = step_size, so each cell is a different task
+# (PRINCIPLES 2.8).  That is the point of the sweep -- we are looking across
+# tasks for a good one -- but it means the comparison that carries meaning is
+# *between models within a cell*, never between cells.  Reading down a column is
+# legitimate only as a check on the assumption that these tasks get harder as
+# step_size shrinks; it is not a controlled comparison.
+#
+# Why these five models.  nn.RNN is the control that makes the rest readable:
+# without it, an LSTM-vs-ours gap conflates gating with implementation.  With it
+# the axes separate -- LSTM/GRU vs nn.RNN is gating, nn.RNN vs S2D dense is
+# implementation (which tests/test_Sequential2DRNN.py proves is zero at K=1, so
+# any visible gap is an optimisation or init difference and is itself a finding),
+# and S2D dense vs S2D monarch is sparsity.
+#
+# Why lra_pathx, lra_listops and lra_text are absent.  listops and text are token
+# tasks needing an embedding, and an embedding consumes one integer per timestep,
+# so step_size must be 1 -- they are single points, not rows, and lra_benchmark
+# asserts it.  pathx costs 182 s/epoch summed over its five cells, 3x the whole
+# rest of the grid, and it is the hardest rung; it is a phase-2 target.
+#
+#   uv run python examples/lra_difficulty_ladder.py examples/lra_runs/difficulty_ladder
+
+# Emitted verbatim into every cell's results.md.
+notes: |
+  ## A SCREENING RUN, ONE SEED, ONE LEARNING RATE
+
+  This cell is one of 20 in `difficulty_ladder/`, run to locate a
+  dataset/`step_size` combination worth studying properly. It is not a benchmark
+  result and no number here should be quoted on its own.
+
+  **One seed and one learning rate (1e-3).** There are no error bars beyond
+  evaluation-set sampling noise, and a model that would do better at a different
+  rate looks worse here. 1e-3 was chosen because every past run at
+  `hidden_size: 128` trained all five of these models without diverging; the
+  divergences recorded in `RESEARCH_LOG.md` 2.4 were all at $d_h = 2048$.
+
+  **`lra_toy_bw` and `lra_image_mnist` hold 1000 rows**, so their test splits are
+  100 rows and the standard error is about 0.05 — differences below ~0.14 are not
+  resolvable there. Those two rungs can support "saturated / not saturated" and
+  nothing finer. `lra_image` and `lra_pathfinder` have 1000-row test splits and
+  resolve about 0.04.
+
+  **Epoch budgets differ by dataset** (20 / 200 / 50 / 50) because a single budget
+  is impossible across a ladder where one task separates in two epochs and another
+  sits at chance until epoch 60. They are recorded per cell in the Setup table.
+
+  **Cells are different tasks.** `step_size` sets both `seq_len` and `input_size`,
+  so accuracies from two cells may not be placed on one axis.
+
+# ---------------------------------------------------------------------------
+# The grid.  Consumed by examples/lra_difficulty_ladder.py, which writes one
+# standalone config.yaml per cell into `<dataset>_step<N>/` and runs
+# lra_benchmark.py on it.  Every other key below is copied into each cell
+# unchanged, so a cell directory is re-runnable on its own.
+# ---------------------------------------------------------------------------
+sweep:
+  # Common to all four datasets: 64, 784 and 1024 are each divisible by all of
+  # these, which is why the grid is powers of two up to 16 and stops there
+  # (lra_toy_bw has only 64 features, so step_size 32 leaves a 2-step sequence).
+  step_sizes: [1, 2, 4, 8, 16]
+
+  # In increasing difficulty.  `epochs` is per dataset and each value has a basis:
+  datasets:
+    - name: lra_toy_bw
+      epochs: 20          # separable by construction; converges in an epoch or two
+    - name: lra_image_mnist
+      epochs: 200         # measured: all rows at chance at 30, GRU clears chance
+                          # near 60 and reaches ~0.86 by 100-200 (mnist_smoke/)
+    - name: lra_image
+      epochs: 50          # measured: in epoch_probe/ both rows land within 0.013
+                          # of their 100-epoch best by epoch 50, which is below
+                          # the 0.016 resolution at n = 1000
+    - name: lra_pathfinder
+      epochs: 50          # A GUESS.  pathfinder has never been run.  Same seq_len
+                          # and row count as lra_image, so lra_image's budget is
+                          # transferred.  Check the curves before trusting it.
+
+dataset:
+  # `name` and `step_size` are filled in per cell; everything else is shared.
+  max_points: null        # full rows: 1000-row test splits on the two large
+                          # datasets are what makes a 0.04 gap resolvable at all
+  train_frac: 0.8
+  val_frac: 0.1           # remainder is test
+  split_seed: 0
+  embedding: null         # all four are continuous-valued; nothing to embed
+  local: true             # uniform across all four -- offline, and one fewer axis
+  data_dir: ../generatedata/data/processed   # relative to the directory you run from
+
+training:
+  epochs: null            # filled in per dataset from `sweep.datasets`
+  batch_size: 64
+  lr: 0.001
+  grad_clip: 1.0
+  seed: 0
+  device: cuda
+
+models:
+  # Gated references.
+  - name: nn.LSTM
+    type: lstm
+    hidden_size: 128
+
+  - name: nn.GRU
+    type: gru
+    hidden_size: 128
+
+  # The control.  At K=1 this is the same recurrence as `S2D dense` below, proven
+  # to 1e-6 by tests/test_Sequential2DRNN.py, so the pair brackets the
+  # implementation difference.
+  - name: nn.RNN
+    type: rnn
+    hidden_size: 128
+
+  - name: S2D dense
+    type: sequential2d
+    hidden_size: 128
+    K: 1
+
+  # The object of study.  nb=4 gives 4 independent 32x32 blocks -- 4096 parameters
+  # against dense's 16384, at 25% density.  lra_benchmark.make_block fixes
+  # use_factorization=False, so nb is a sparsity knob alone and not also a
+  # model-class and initialisation-gain knob; see the table in that docstring.
+  - name: S2D monarch nb=4
+    type: sequential2d
+    hidden_size: 128
+    K: 1
+    W_hh: monarch
+    num_blocks: 4

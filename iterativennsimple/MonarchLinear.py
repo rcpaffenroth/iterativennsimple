@@ -35,6 +35,10 @@ class MonarchLinear(nn.Module):
         perm_in:           LongTensor of shape (in_features,) — input permutation index array.
         perm_out:          LongTensor of shape (out_features,) — output permutation index array.
         bias:              If True, add a learnable bias of shape (out_features,).
+        use_factorization: If True (default), and the blocks are uniform and square
+                           and num_blocks is a perfect power n^k, store n shared
+                           factors instead of num_blocks independent blocks (see
+                           below).  Set False for plain independent blocks.
         device:            Target device.
         dtype:             Target dtype.
 
@@ -90,6 +94,7 @@ class MonarchLinear(nn.Module):
         perm_out: torch.Tensor,
         bias: bool = True,
         force_loop_matmul: bool = False,
+        use_factorization: bool = True,
         device=None,
         dtype=None,
     ) -> None:
@@ -127,8 +132,15 @@ class MonarchLinear(nn.Module):
         # When blocks are uniform and square, and num_blocks is a perfect power
         # n^k, we store only n factor matrices and compose all n^k ordered
         # products (AA, AB, BA, BB, ...) via non-commutative matmul.
+        #
+        # This is a different model from num_blocks independent blocks, not a
+        # cheaper encoding of the same one -- the blocks become weight-tied, the
+        # parameter count is n(d/nb)^2 rather than d^2/nb, and each block is a
+        # product of k Kaiming factors so its gain is 3^{-k/2} rather than
+        # 3^{-1/2}.  `use_factorization=False` asks for the independent blocks.
         factoring = None
-        if (len(set(block_in_features)) == 1
+        if (use_factorization
+                and len(set(block_in_features)) == 1
                 and len(set(block_out_features)) == 1
                 and block_in_features[0] == block_out_features[0]):
             factoring = MonarchLinear._factorization(self.num_blocks)
@@ -477,6 +489,7 @@ class MonarchLinear(nn.Module):
         initialization_type: str | int = "kaiming",
         bias: bool = False,
         force_loop_matmul: bool = False,
+        use_factorization: bool = True,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -492,6 +505,8 @@ class MonarchLinear(nn.Module):
                 "kaiming" (default), "zeros", 1, "C=val", "G", "G=mu,sigma",
                 "U", "U=lo,hi".
             bias:  Whether to include a learnable bias.
+            use_factorization: See MonarchLinear.  False gives independent blocks
+                even when num_blocks is a perfect power.
             seed:  Optional integer seed for reproducible permutation generation.
             device: Target device.
             dtype:  Target dtype.
@@ -512,6 +527,7 @@ class MonarchLinear(nn.Module):
             perm_out=perm_out,
             bias=bias,
             force_loop_matmul=force_loop_matmul,
+            use_factorization=use_factorization,
             device=device,
             dtype=dtype,
         )
@@ -532,6 +548,7 @@ class MonarchLinear(nn.Module):
         initialization_type: str | int = "kaiming",
         bias: bool = False,
         force_loop_matmul: bool = False,
+        use_factorization: bool = True,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -544,6 +561,10 @@ class MonarchLinear(nn.Module):
             num_blocks:   Number of blocks along the diagonal.
             initialization_type: See from_block_config. Default "kaiming".
             bias:   Whether to include a learnable bias.
+            use_factorization: See MonarchLinear.  With the default True, a
+                num_blocks that is a perfect power (4, 8, 9, 16, ...) silently
+                yields the weight-tied factored model rather than num_blocks
+                independent blocks.  Pass False for independent blocks.
             seed:   Optional seed for reproducible permutations.
             device: Target device.
             dtype:  Target dtype.
@@ -572,6 +593,7 @@ class MonarchLinear(nn.Module):
             initialization_type=initialization_type,
             bias=bias,
             force_loop_matmul=force_loop_matmul,
+            use_factorization=use_factorization,
             seed=seed,
             device=device,
             dtype=dtype,
@@ -585,6 +607,7 @@ class MonarchLinear(nn.Module):
         initialization_type: str | int = "kaiming",
         bias: bool = False,
         force_loop_matmul: bool = False,
+        use_factorization: bool = True,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -606,6 +629,8 @@ class MonarchLinear(nn.Module):
             target_sparsity: Desired fraction of zeros. Must be in [0, 1).
             initialization_type: See from_block_config. Default "kaiming".
             bias:    Whether to include a learnable bias.
+            use_factorization: See MonarchLinear.  Also governs the divisor search
+                below, which prefers perfect powers only when they will be used.
             seed:    Optional seed for reproducible permutations.
             device:  Target device.
             dtype:   Target dtype.
@@ -627,14 +652,16 @@ class MonarchLinear(nn.Module):
         def is_valid(k: int) -> bool:
             return in_features % k == 0 and out_features % k == 0
 
-        # Search outward from ideal_k_int for a valid divisor.
-        # Prefer factorable candidates (perfect powers) for memory savings.
+        # Search outward from ideal_k_int for a valid divisor.  Prefer factorable
+        # candidates (perfect powers) for memory savings -- but only when
+        # factorization will actually be used, since otherwise that preference
+        # picks a num_blocks whose sole merit was being a perfect power.
         num_blocks = None
+        prefer_factorable = (lambda c: (MonarchLinear._factorization(c) is None, c)
+                             ) if use_factorization else (lambda c: c)
         for delta in range(max(in_features, out_features)):
             candidates = sorted(
-                {ideal_k_int + delta, ideal_k_int - delta},
-                key=lambda c: (MonarchLinear._factorization(c) is None, c),
-            )
+                {ideal_k_int + delta, ideal_k_int - delta}, key=prefer_factorable)
             for candidate in candidates:
                 if candidate >= 1 and is_valid(candidate):
                     num_blocks = candidate
@@ -660,6 +687,7 @@ class MonarchLinear(nn.Module):
             initialization_type=initialization_type,
             bias=bias,
             force_loop_matmul=force_loop_matmul,
+            use_factorization=use_factorization,
             seed=seed,
             device=device,
             dtype=dtype,
@@ -673,6 +701,7 @@ class MonarchLinear(nn.Module):
         initialization_type: str | int = "kaiming",
         bias: bool = False,
         force_loop_matmul: bool = False,
+        use_factorization: bool = True,
         seed: int | None = None,
         device=None,
         dtype=None,
@@ -694,6 +723,9 @@ class MonarchLinear(nn.Module):
                             Must be in [1, in_features * out_features].
             initialization_type: See from_block_config. Default "kaiming".
             bias:    Whether to include a learnable bias.
+            use_factorization: See MonarchLinear.  Note that `target_entries`
+                counts non-zeros of S; under factorization the *trainable*
+                parameter count is smaller than that by a factor num_blocks/n.
             seed:    Optional seed for reproducible permutations.
             device:  Target device.
             dtype:   Target dtype.
@@ -717,13 +749,14 @@ class MonarchLinear(nn.Module):
         def is_valid(k: int) -> bool:
             return in_features % k == 0 and out_features % k == 0
 
-        # Prefer factorable candidates (perfect powers) for memory savings.
+        # Prefer factorable candidates (perfect powers) for memory savings -- but
+        # only when factorization will actually be used.  See from_sparsity_target.
         num_blocks = None
+        prefer_factorable = (lambda c: (MonarchLinear._factorization(c) is None, c)
+                             ) if use_factorization else (lambda c: c)
         for delta in range(max(in_features, out_features)):
             candidates = sorted(
-                {ideal_k_int + delta, ideal_k_int - delta},
-                key=lambda c: (MonarchLinear._factorization(c) is None, c),
-            )
+                {ideal_k_int + delta, ideal_k_int - delta}, key=prefer_factorable)
             for candidate in candidates:
                 if candidate >= 1 and is_valid(candidate):
                     num_blocks = candidate
@@ -748,6 +781,7 @@ class MonarchLinear(nn.Module):
             initialization_type=initialization_type,
             bias=bias,
             force_loop_matmul=force_loop_matmul,
+            use_factorization=use_factorization,
             seed=seed,
             device=device,
             dtype=dtype,

@@ -78,6 +78,103 @@ considered and declined — hoisting the input matmul out of the loop, §5.5b of
 `tasks/OVERVIEW_RNN_SEQUENTIAL_2D.md` — was declined partly because it would have
 split the equation across a precompute and a loop for a measured 30%.
 
+### 1.5 A name is a promise that the body need not be read
+
+From the `MaskedLinear` style experiment (`tasks/STYLE_EXPERIMENT_MaskedLinear_simplified.md`),
+on the test helper `train_briefly`: *"clear and approachable. That is a nice unit of
+code that I like and can lay the foundation for a student to copy that function and
+extend it."*
+
+The test is not whether the name is accurate. It is whether a reader can **use it,
+and copy it, without opening it**. `train_briefly(m, x, target)` passes.
+`parse_pattern(spec)` does not — you have to read the body to find out what it does
+with your string. Keep such a unit small enough to lift into the next script and
+edit there; that is what makes it a foundation rather than a dependency.
+
+A corollary that cost a rename here: **do not borrow a name from the library that
+means something else there.** The block-assembly function was called `stack` until
+it was read and found confusing — `torch.stack` adds an axis and this one does not.
+It is `block_matrix` now, and its docstring says what it is: a 2D unzip followed by
+two ordinary assemblies.
+
+### 1.6 Longer on the page can be shorter to read
+
+The phrase is from the same experiment and is worth keeping verbatim, because it
+names the trade the file is making. **Page length is not the cost function; reading
+effort is.** Writing a block matrix out as a block matrix takes more characters than
+three parallel grids of strings and is less work to read, because it removes an
+interpreter, an invariant three arrays had to satisfy together, and the need to
+remember which axis is which.
+
+So when a change makes the code longer, say in those terms what it took away — a
+hop, an invariant the reader had to hold, a layer of interpretation — and make the
+change if something really is gone. The converse binds too: **do not golf.** A
+shortening that adds a hop is a loss, and it is usually recorded as a win.
+
+### 1.7 Introduce a name only where the mathematics already has a joint
+
+On the `Block` type — the pair `(W_0, Omega)`: *"it cuts at the joint."*
+
+`Block` is one name for two matrices the mathematics already treats as one object:
+the layer is *determined by* the pair, and assembling a block matrix acts on both
+halves identically and never mixes them. The test that it is a joint and not a
+wrapper is that **some operation consumes the whole thing** — here, `block_matrix`.
+
+The version of that file which failed this test named ten more things —
+`Bernoulli(p)`, `PerRow(n)`, `Gaussian(mu, sigma)` and so on — and nothing ever
+acted on one of them except a `match` statement that immediately took it apart
+again. That is the same information with a ceremony attached, and it cost 53 lines
+and ten names to hold.
+
+Before adding a type, name the operation that will consume it whole. If there is
+none, do not add it.
+
+### 1.8 Write what the library does not provide, and mark the boundary
+
+Two patterns from the same file, both worth copying.
+
+**Enumerate the cases of one concept as a closed set of named functions.** `frozen`,
+`trainable` and `trainable_where_nonzero` are the three values the old `trainable`
+argument could take. Each is two lines, and each reads as a verb at the call site:
+`trainable(kaiming(3, 4))`. One function with a three-way string argument would hold
+the same content where the reader cannot see it.
+
+**Put a header on the boundary with the library.** `bernoulli`, `per_row` and
+`scattered` exist because torch has no one-call equivalent; block *values* are
+written `torch.randn(5, 8) * 0.7 + 0.2` because it does. The section comment saying
+exactly that — "what torch does not provide" — tells the next author where *not* to
+add, which a list of functions cannot say by itself.
+
+### 1.9 A configuration language belongs with the configuration files
+
+A string mini-language like `'R=0.5'` exists because a YAML file cannot hold a Python
+function. That is a fact about YAML, so the interpreter belongs beside the YAML
+loader and not inside the object being configured — otherwise every reader of the
+object pays for a feature only the configuration path uses.
+`MaskedLinear_simplified.py` takes tensors and knows nothing about configs;
+`masked_linear_simplified_config.py` holds the vocabulary, the loader and the
+command line, and imports the layer rather than the other way round.
+
+Two rules keep it from growing back into an interpreter:
+
+- **Closed vocabulary, with an escape to the host language.** The menu of block
+  values and sparsity patterns is small and fixed. A structure that is not on it —
+  `torch.tril`, a Kronecker pattern, a matrix loaded from disk — is written in Python
+  against the layer directly. Extending the *language* is what made the original
+  hard to read, and it is the failure this rule exists to prevent.
+- **List the blocks; do not draw the grid.** Named slots and an edge list of the
+  non-zero blocks grow with the number of blocks rather than with slots squared,
+  `from`/`to` remove the row/column orientation question entirely, and a structural
+  change between two runs is a one-line diff — which matters because a config is
+  also a record of what was run (§2.7).
+
+And one that is RCP's and is better than either format alone: **keep both notations
+and make the conversion a check.** The grid and the edge list fail differently, so
+rendering one from the other catches what reading either alone does not — a block
+you meant to write and did not shows up as a hole in a matrix rather than as a line
+that is simply absent from a list. That is what
+`python -m iterativennsimple.masked_linear_simplified_config <config.yaml>` is for.
+
 ---
 
 ## Part 2 — Claims
@@ -233,6 +330,9 @@ line per model listing every axis, and look at the columns.
 | `tasks/TODO_Sequential2DRNN.md` | deferred work, the experiment queue, and the findings log with its retractions |
 | `README_Sequential2DRNN.md` | user-facing entry point for the module |
 | `examples/lra_runs/README.md` | the benchmark harness, config schema, and cost model |
+| `tasks/STYLE_EXPERIMENT_MaskedLinear_simplified.md` | the experiment §§1.5-1.9 came out of: four reimplementations of one module, what was measured, and what was kept |
+| `iterativennsimple/MaskedLinear_simplified.py` | the layer as §§1.5-1.8 would have it. **Not** a drop-in for `MaskedLinear.py`, which stays the reference |
+| `iterativennsimple/masked_linear_simplified_config.py` | its YAML loader and the two-format converter (§1.9); has a command line |
 | `PRINCIPLES.md` | this file |
 
 Two standing notes that are easy to get wrong and expensive to get wrong:
